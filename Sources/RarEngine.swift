@@ -8,7 +8,8 @@ enum ArchiveKind {
 }
 
 struct ArchiveEntry {
-    var name: String            // arşiv içindeki tam yol
+    var name: String            // arşiv içindeki arındırılmış yol (".", ".." ve baştaki "/" atılmış); ağaç ve görüntü bunu kullanır
+    var rawName: String = ""    // arşivdeki ham ad; 7zz'ye giden komutlar bunu kullanır (boşsa name)
     var isDirectory: Bool
     var size: Int64 = 0
     var packedSize: Int64 = 0
@@ -18,6 +19,16 @@ struct ArchiveEntry {
     var encrypted: Bool = false
     var attributes: String = ""
     var compression: String = ""
+
+    /// 7zz'nin çıkartırken yaptığı gibi: boş, "." ve ".." bileşenleri ile baştaki "/" atılır
+    static func sanitize(_ path: String) -> String {
+        path.split(separator: "/", omittingEmptySubsequences: true)
+            .filter { $0 != "." && $0 != ".." }
+            .joined(separator: "/")
+    }
+
+    /// 7zz'ye verilecek ad
+    var commandName: String { rawName.isEmpty ? name : rawName }
 
     var displayName: String { (name as NSString).lastPathComponent }
     var parentPath: String { (name as NSString).deletingLastPathComponent }
@@ -40,7 +51,8 @@ struct ArchiveInfo {
     var topLevelNames: [String] {
         var seen = Set<String>(); var out: [String] = []
         for e in entries {
-            let top = e.name.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init) ?? e.name
+            guard let top = e.name.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: true).first.map(String.init),
+                  top != ".", top != ".." else { continue }
             if seen.insert(top).inserted { out.append(top) }
         }
         return out
@@ -307,7 +319,10 @@ enum RarRunner {
             guard let name = block["Path"], !name.isEmpty else { return }
             let attrs = block["Attributes"] ?? ""
             let isDir = block["Folder"] == "+" || attrs.hasPrefix("D")
-            var e = ArchiveEntry(name: name.hasSuffix("/") ? String(name.dropLast()) : name, isDirectory: isDir)
+            let rawName = name.hasSuffix("/") ? String(name.dropLast()) : name
+            let clean = ArchiveEntry.sanitize(rawName)
+            guard !clean.isEmpty else { return }   // yalnız ".." / "." gibi: diske hiçbir şey yazılmaz
+            var e = ArchiveEntry(name: clean, rawName: rawName, isDirectory: isDir)
             e.size = Int64(block["Size"] ?? "") ?? 0
             e.packedSize = Int64(block["Packed Size"] ?? "") ?? 0
             if e.size > 0, e.packedSize > 0 { e.ratio = "\(Int(Double(e.packedSize) * 100 / Double(e.size)))%" }
@@ -362,12 +377,59 @@ final class RarJob {
     }
 
     private var processes: [Process] = []
+    private let lock = NSLock()               // processes ve cancelledFlag için
+    private var cancelledFlag = false
     private var monitoredTool: RarTool = .sevenZip
     private let queue = DispatchQueue(label: "macrar.job")
     private var buffer = Data()
-    private var output = ""
-    private(set) var cancelled = false
+    // Çıktı sınırlıdır: ilk ~256 KB ve son ~768 KB tutulur, arası tek satırla özetlenir (yalnız `queue` üzerinde)
+    private static let headLimit = 256 * 1024
+    private static let tailLimit = 768 * 1024
+    private var outHead = ""
+    private var outHeadBytes = 0
+    private var outTail: [String] = []
+    private var outTailStart = 0
+    private var outTailBytes = 0
+    private var outSkipped = 0
+    private var output: String {
+        var s = outHead
+        if outSkipped > 0 { s += "… (\(outSkipped) satır atlandı) …\n" }
+        for i in outTailStart..<outTail.count { s += outTail[i] }
+        return s
+    }
+    private func appendOutput(_ piece: String) {
+        if outHeadBytes < Self.headLimit && outSkipped == 0 && outTailStart == outTail.count {
+            outHead += piece
+            outHeadBytes += piece.utf8.count
+            return
+        }
+        outTail.append(piece)
+        outTailBytes += piece.utf8.count
+        // Baştan at; en az son satır kalsın
+        while outTailBytes > Self.tailLimit && outTailStart < outTail.count - 1 {
+            outTailBytes -= outTail[outTailStart].utf8.count
+            outTail[outTailStart] = ""
+            outTailStart += 1
+            outSkipped += 1
+        }
+        if outTailStart > 4096 && outTailStart * 2 > outTail.count {
+            outTail.removeFirst(outTailStart)
+            outTailStart = 0
+        }
+    }
+    var cancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelledFlag }
     var onEvent: ((Event) -> Void)?   // ana kuyrukta çağrılır
+
+    // Süren işlerin kaydı: çıkışta uyarmak ve süreçleri durdurmak için
+    private static var active: [ObjectIdentifier: RarJob] = [:]
+    private static let activeLock = NSLock()
+    static var hasActive: Bool { activeLock.lock(); defer { activeLock.unlock() }; return !active.isEmpty }
+    static func cancelAll() {
+        activeLock.lock(); let jobs = Array(active.values); activeLock.unlock()
+        jobs.forEach { $0.cancel() }
+    }
+    private func register() { Self.activeLock.lock(); Self.active[ObjectIdentifier(self)] = self; Self.activeLock.unlock() }
+    private func unregister() { Self.activeLock.lock(); Self.active[ObjectIdentifier(self)] = nil; Self.activeLock.unlock() }
 
     private static let verbs = ["Extracting", "Adding", "Testing", "Updating", "Creating", "Deleting", "Compressing", "Fresh", "Calculating"]
     private static let percentRegex = try! NSRegularExpression(pattern: #"(\d{1,3})%"#)
@@ -402,7 +464,8 @@ final class RarJob {
             self.queue.async {
                 self.consume(rest)
                 self.flushPartial()
-                let others = self.processes.filter { $0 !== proc }
+                self.lock.lock(); let all = self.processes; self.lock.unlock()
+                let others = all.filter { $0 !== proc }
                 if self.cancelled || proc.terminationStatus != 0 {
                     // Son aşama hatalı bitti: önceki aşamalar boruya yazarken takılmasın
                     others.forEach { if $0.isRunning { $0.terminate() } }
@@ -415,12 +478,15 @@ final class RarJob {
                 others.forEach { $0.waitUntilExit() }
                 pipeline.forEach { $0.stderr?.finish() }
                 let result = RarRunner.combinedResult(pipeline, output: self.output, cancelled: self.cancelled)
+                self.unregister()   // completion'dan önce: bitiş yolunda çıkış uyarısı çıkmasın
                 DispatchQueue.main.async { completion(result) }
             }
         }
-        processes = procs
+        lock.lock(); processes = procs; lock.unlock()
+        register()
         for p in procs {
             do { try p.run() } catch {
+                unregister()
                 DispatchQueue.main.async {
                     completion(RarResult(code: -1, output: LF("Çalıştırılamadı: %@", error.localizedDescription)))
                 }
@@ -430,8 +496,8 @@ final class RarJob {
     }
 
     func cancel() {
-        cancelled = true
-        processes.forEach { if $0.isRunning { $0.terminate() } }
+        lock.lock(); cancelledFlag = true; let procs = processes; lock.unlock()
+        procs.forEach { if $0.isRunning { $0.terminate() } }
     }
 
     private func consume(_ data: Data) {
@@ -440,7 +506,7 @@ final class RarJob {
             let lineData = buffer[buffer.startIndex..<nl]
             buffer.removeSubrange(buffer.startIndex...nl)
             let line = String(decoding: lineData, as: UTF8.self)
-            output += Self.lastSegment(line, keepAll: true) + "\n"
+            appendOutput(Self.lastSegment(line, keepAll: true) + "\n")
             parse(Self.lastSegment(line))
         }
         // Satır sonu gelmeden geri-silme (\u{8}) ile güncellenen ilerleme: yalnızca en son durumu oku
@@ -450,6 +516,10 @@ final class RarJob {
             // Uzun süren tek dosyada tampon şişmesin: son geri-silme dizisinden öncesini at
             if buffer.count > 64 * 1024, let cut = buffer.lastIndex(of: 0x08) {
                 buffer.removeSubrange(buffer.startIndex...cut)
+            }
+            // Geri-silme yoksa (ya da hâlâ büyükse) yalnız son kısım tutulur
+            if buffer.count > 64 * 1024 {
+                buffer = Data(buffer.suffix(4 * 1024))
             }
         }
     }
@@ -467,7 +537,7 @@ final class RarJob {
 
     private func flushPartial() {
         if !buffer.isEmpty {
-            output += String(decoding: buffer, as: UTF8.self).replacingOccurrences(of: "\u{8}", with: "")
+            appendOutput(String(decoding: buffer, as: UTF8.self).replacingOccurrences(of: "\u{8}", with: ""))
             buffer.removeAll()
         }
     }
@@ -610,6 +680,35 @@ enum TempDirs {
     static func cleanupAll() {
         lock.lock(); let list = created; created = []; lock.unlock()
         for p in list { try? FileManager.default.removeItem(atPath: p) }
+    }
+    /// Tek bir geçici klasörü kayıttan düşer ve arka planda siler
+    static func remove(_ path: String) {
+        lock.lock(); created.removeAll { $0 == path }; lock.unlock()
+        DispatchQueue.global(qos: .utility).async { try? FileManager.default.removeItem(atPath: path) }
+    }
+    /// Çökme sonrası kalan eski geçici klasörleri siler. 24 saatten yeni olanlara dokunulmaz:
+    /// aynı anda çalışan başka MacRAR örnekleri (Finder hızlı eylemleri) kullanıyor olabilir.
+    static func sweepStale() {
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
+            let prefixes = ["Archiver-", "open-", "ql-", "drag-", "rar-install-"]
+            let limit = Date().addingTimeInterval(-24 * 3600)
+            let root = fm.temporaryDirectory
+            guard let items = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey, .isSymbolicLinkKey], options: []) else { return }
+            // Ad tam olarak "<önek>-<UUID>" olmalı (ortak $TMPDIR'de başka uygulamaların klasörlerine dokunma)
+            func isOurs(_ name: String) -> Bool {
+                for p in prefixes where name.hasPrefix(p) {
+                    return UUID(uuidString: String(name.dropFirst(p.count))) != nil
+                }
+                return false
+            }
+            for u in items where isOurs(u.lastPathComponent) {
+                guard let v = try? u.resourceValues(forKeys: [.contentModificationDateKey, .isDirectoryKey, .isSymbolicLinkKey]),
+                      v.isSymbolicLink != true,
+                      v.isDirectory == true, let m = v.contentModificationDate, m < limit else { continue }
+                try? fm.removeItem(at: u)
+            }
+        }
     }
 }
 

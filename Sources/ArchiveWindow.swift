@@ -35,13 +35,15 @@ final class EmptyStateView: NSView {
 final class Node: NSObject {
     let name: String
     let path: String
+    /// 7zz'ye giden ham yol (normal arşivlerde path ile aynı)
+    var rawPath: String
     let isDir: Bool
     var entry: ArchiveEntry?
     var children: [Node] = []
     weak var parent: Node?
 
     init(name: String, path: String, isDir: Bool) {
-        self.name = name; self.path = path; self.isDir = isDir
+        self.name = name; self.path = path; self.rawPath = path; self.isDir = isDir
     }
 
     // Klasör toplamları buildTree sonunda bir kez hesaplanır (hücre çiziminde ve sıralamada her seferinde
@@ -49,6 +51,8 @@ final class Node: NSObject {
     private(set) var totalSize: Int64 = 0
     private(set) var totalPacked: Int64 = 0
     private(set) var containsEncrypted = false
+    /// Alt ağaçta (kendisi dahil) ham adı arındırılmış adından farklı girdi var mı? buildTree sonunda hesaplanır
+    private(set) var containsTraversal = false
 
     /// Toplamları alttan yukarı hesaplar
     func computeTotals() {
@@ -56,14 +60,17 @@ final class Node: NSObject {
             totalSize = entry?.size ?? 0
             totalPacked = entry?.packedSize ?? 0
             containsEncrypted = entry?.encrypted ?? false
+            containsTraversal = entry.map { $0.commandName != $0.name } ?? false
             return
         }
         var size: Int64 = 0, packed: Int64 = 0, enc = false
+        var trav = entry.map { $0.commandName != $0.name } ?? false
         for c in children {
             c.computeTotals()
             size += c.totalSize; packed += c.totalPacked; enc = enc || c.containsEncrypted
+            trav = trav || c.containsTraversal
         }
-        totalSize = size; totalPacked = packed; containsEncrypted = enc
+        totalSize = size; totalPacked = packed; containsEncrypted = enc; containsTraversal = trav
     }
 
     func sortRecursively(key: String = "name", ascending: Bool = true) {
@@ -107,11 +114,14 @@ final class Node: NSObject {
         for e in entries {
             let clean = e.name.hasSuffix("/") ? String(e.name.dropLast()) : e.name
             if e.isDirectory {
-                ensure(clean).entry = e
+                let d = ensure(clean)
+                d.entry = e
+                d.rawPath = e.commandName
             } else {
                 let parent = ensure((clean as NSString).deletingLastPathComponent)
                 let n = Node(name: (clean as NSString).lastPathComponent, path: clean, isDir: false)
                 n.entry = e
+                n.rawPath = e.commandName
                 n.parent = parent
                 parent.children.append(n)
                 map[clean] = n
@@ -120,6 +130,18 @@ final class Node: NSObject {
         root.computeTotals()
         root.sortRecursively(key: key, ascending: ascending)
         return root
+    }
+
+    /// 7zz'ye verilecek ham adlar: traversal içeren klasörde alt ağaçtaki tüm girdilerin ham adları, aksi halde tek yol
+    func commandPaths() -> [String] {
+        guard isDir, containsTraversal else { return [rawPath] }
+        var out: [String] = []
+        func walk(_ n: Node) {
+            if let e = n.entry { out.append(e.commandName) }
+            n.children.forEach(walk)
+        }
+        walk(self)
+        return out
     }
 
     func flatten(into out: inout [Node]) {
@@ -139,6 +161,10 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var root = Node(name: "", path: "", isDir: true)
     private var filtered: [Node]? = nil
     private var filterText = ""
+    /// Arama sonuçlarının nesli: eski aramanın / eski arşivin sonucu yenisini ezmez
+    private var filterGeneration = 0
+    private var filterDebounce: DispatchWorkItem?
+    private let filterQueue = DispatchQueue(label: "macrar.filter", qos: .userInitiated)
 
     private let outline = ArchiveOutlineView()
     private let scroll = NSScrollView()
@@ -150,6 +176,10 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var previewURLs: [URL] = []
     /// Hızlı Bakış isteklerinin nesli: yalnızca en son isteğin çıkartması önizlemeye yazılır
     private var quickLookGeneration = 0
+    /// Bu pencerenin "open" / "drag" geçici klasörleri (pencere kapanınca ya da arşiv değişince silinir)
+    private var ownedTempDirs: [String] = []
+    /// Son Hızlı Bakış klasörü
+    private var quickLookDir: String?
     // Arka planda listeleme: "Yükleniyor…" katmanı ve iptal
     private let loadingView = NSBox()
     private let loadingDetail = NSTextField(labelWithString: "")
@@ -368,9 +398,18 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// completion(açıldı mı): listeleme arka planda bittiğinde (iptal / hata → false)
     func open(_ path: String, completion: ((Bool) -> Void)? = nil) {
+        cleanupOwnedTempDirs()   // önceki arşivin geçici dosyaları
         archivePath = path
         password = nil
         reload(completion: completion)
+    }
+
+    /// Bu pencerenin izlediği tüm geçici klasörleri siler
+    private func cleanupOwnedTempDirs() {
+        for p in ownedTempDirs { TempDirs.remove(p) }
+        ownedTempDirs = []
+        if let q = quickLookDir { TempDirs.remove(q); quickLookDir = nil }
+        previewURLs = []
     }
 
     /// Arşivi arka planda listeler; bu sırada pencerede "Yükleniyor…" katmanı ve iptal düğmesi görünür.
@@ -474,16 +513,29 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func applyFilter() {
+        filterGeneration += 1
+        let gen = filterGeneration
         if filterText.isEmpty {
             filtered = nil
-        } else {
-            var all: [Node] = []
-            root.flatten(into: &all)
-            filtered = all.filter { $0.path.localizedCaseInsensitiveContains(filterText) }
-                .sorted { Node.compare($0, $1, key: sortKey, ascending: sortAscending) }
+            outline.reloadData()
+            updateStatus()
+            return
         }
-        outline.reloadData()
-        updateStatus()
+        // Ana iş parçacığında yalnız düzleştirilmiş kopya alınır; eşleştirme ve sıralama arka planda
+        var all: [Node] = []
+        root.flatten(into: &all)
+        let text = filterText, key = sortKey, asc = sortAscending
+        filterQueue.async { [weak self] in
+            // Yalnız değişmeyen alanlar okunur (path, isDir, name, toplamlar, entry); children'a dokunulmaz
+            let result = all.filter { $0.path.localizedCaseInsensitiveContains(text) }
+                .sorted { Node.compare($0, $1, key: key, ascending: asc) }
+            DispatchQueue.main.async {
+                guard let self, gen == self.filterGeneration else { return }
+                self.filtered = result
+                self.outline.reloadData()
+                self.updateStatus()
+            }
+        }
     }
 
     private func updateStatus() {
@@ -529,7 +581,7 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private static func paths(for nodes: [Node]) -> [String] {
         let dirs = nodes.filter { $0.isDir }.map { $0.path + "/" }
-        return nodes.filter { n in !dirs.contains { n.path.hasPrefix($0) } }.map { $0.path }
+        return nodes.filter { n in !dirs.contains { n.path.hasPrefix($0) } }.flatMap { $0.commandPaths() }
     }
 
     // MARK: Eylemler
@@ -653,7 +705,8 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func openNode(_ n: Node) {
         guard let info else { return }
         let tmp = TempDirs.make("open")
-        Ops.extract(info: info, names: [n.path], dest: tmp, password: password, host: window, quiet: true) { [weak self] ok, pw in
+        ownedTempDirs.append(tmp)   // pencere kapanana dek kalır (dosya başka uygulamada açık olabilir)
+        Ops.extract(info: info, names: [n.rawPath], dest: tmp, password: password, host: window, quiet: true) { [weak self] ok, pw in
             self?.password = pw ?? self?.password
             guard ok else { return }
             let target = (tmp as NSString).appendingPathComponent(n.path)
@@ -682,13 +735,17 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
         quickLookGeneration += 1
         let gen = quickLookGeneration
         let tmp = TempDirs.make("ql")
-        Ops.extract(info: info, names: files.map { $0.path }, dest: tmp, password: password, host: window, quiet: true) { [weak self] ok, pw in
+        Ops.extract(info: info, names: files.map { $0.rawPath }, dest: tmp, password: password, host: window, quiet: true) { [weak self] ok, pw in
             guard let self else { return }
             self.password = pw ?? self.password
             // Bu arada seçim değiştiyse geç biten eski çıkartma yeni önizlemeyi ezmesin
-            guard ok, gen == self.quickLookGeneration else { try? FileManager.default.removeItem(atPath: tmp); return }
+            guard ok, gen == self.quickLookGeneration else { TempDirs.remove(tmp); return }
+            let old = self.quickLookDir
             self.previewURLs = files.map { URL(fileURLWithPath: (tmp as NSString).appendingPathComponent($0.path)) }
+            self.quickLookDir = tmp
             completion()
+            // Eski önizleme klasörü, yeni değer atanıp panel yenilendikten sonra silinir
+            if let old, old != tmp { TempDirs.remove(old) }
         }
     }
 
@@ -698,7 +755,15 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     @objc func searchChanged(_ sender: NSSearchField) {
         filterText = sender.stringValue.trimmingCharacters(in: .whitespaces)
-        applyFilter()
+        filterDebounce?.cancel()
+        filterDebounce = nil
+        if filterText.isEmpty {
+            applyFilter()   // boşaltılınca filtre hemen kalkar
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in self?.applyFilter() }
+        filterDebounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     @objc func selectAllItems(_ sender: Any?) {
@@ -742,7 +807,10 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
         loadTask?.cancel()
         loadTask = nil
         loadGeneration += 1
+        filterGeneration += 1
+        filterDebounce?.cancel()
         quickLookGeneration += 1
+        cleanupOwnedTempDirs()
         AppDelegate.shared.windowClosed(self)
     }
 }
@@ -1011,6 +1079,7 @@ extension ArchiveWindowController: NSFilePromiseProviderDelegate {
             // İlk öğe: sürüklenen tüm öğeleri tek seferde geçici klasöre çıkart
             let tmp = TempDirs.make("drag")
             dragTempDir = tmp
+            ownedTempDirs.append(tmp)
             dragExtracted = true
             Ops.extract(info: info, names: Self.paths(for: nodes), dest: tmp, password: password, host: window, quiet: true) { ok, pw in
                 self.password = pw ?? self.password
@@ -1023,8 +1092,11 @@ extension ArchiveWindowController: NSFilePromiseProviderDelegate {
         // Son vaat tamamlanınca geçici klasörü temizle
         dragPending -= 1
         if dragPending <= 0, let tmp = dragTempDir {
-            try? FileManager.default.removeItem(atPath: tmp)
-            DispatchQueue.main.async { self.dragTempDir = nil }
+            TempDirs.remove(tmp)
+            DispatchQueue.main.async {
+                self.dragTempDir = nil
+                self.ownedTempDirs.removeAll { $0 == tmp }
+            }
         }
         completionHandler(error)
     }

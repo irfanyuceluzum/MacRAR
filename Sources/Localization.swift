@@ -14,6 +14,9 @@ enum L10n {
 
     static let en: [String: String] = [
         // Genel
+        "Süren bir işlem var": "An operation is in progress",
+        "Çıkarsanız işlem durdurulur ve hedefte yarım kalmış dosyalar olabilir.": "If you quit, the operation will be stopped and incomplete files may be left in the destination.",
+        "Durdur ve Çık": "Stop and Quit",
         "Tamam": "OK", "İptal": "Cancel", "Çıkart": "Extract", "Aç": "Open", "Seç": "Choose", "Ekle": "Add", "Sil": "Delete",
         "Evet": "Yes", "Hayır": "No", "arşiv": "archive", "Bilinmeyen hata.": "Unknown error.",
         "Çalıştırılamadı: %@": "Could not run: %@",

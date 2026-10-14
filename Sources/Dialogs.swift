@@ -212,6 +212,9 @@ final class ProgressPanel: NSWindowController {
     private let logView = NSTextView()
     private let startTime = Date()
     private var lastLogged = ""
+    private var logLineCount = 0
+    private var lastLogScroll = Date.distantPast
+    private var logScrollPending = false
     /// unrar çıktısındaki hedef klasör öneki (dosya adlarını kısaltmak için)
     var stripPrefix: String?
     var onCancel: (() -> Void)?
@@ -390,10 +393,45 @@ final class ProgressPanel: NSWindowController {
             .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
             .foregroundColor: NSColor.secondaryLabelColor,
         ]))
-        if !logScroll.isHidden { scrollLogToEnd() }
+        logLineCount += 1
+        trimLogIfNeeded()
+        if !logScroll.isHidden { scrollLogThrottled() }
+    }
+
+    /// Günlük en fazla ~5000 satır tutar; aşınca baştan kırpılır (sık kırpmamak için 500 satırlık pay)
+    private func trimLogIfNeeded() {
+        let maxLines = 5000, slack = 500
+        guard logLineCount > maxLines + slack, let storage = logView.textStorage else { return }
+        let ns = storage.string as NSString
+        var toDrop = logLineCount - maxLines
+        var idx = 0
+        while toDrop > 0, idx < ns.length {
+            let r = ns.range(of: "\n", range: NSRange(location: idx, length: ns.length - idx))
+            if r.location == NSNotFound { idx = ns.length; break }
+            idx = r.location + 1
+            toDrop -= 1
+        }
+        storage.deleteCharacters(in: NSRange(location: 0, length: idx))
+        logLineCount = maxLines
+    }
+
+    /// Sona kaydırma saniyede en fazla ~3 kez; bekleyen son kaydırma gecikmeli yapılır
+    private func scrollLogThrottled() {
+        let wait = 0.33 - Date().timeIntervalSince(lastLogScroll)
+        if wait <= 0 {
+            scrollLogToEnd()
+        } else if !logScrollPending {
+            logScrollPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+                guard let self else { return }
+                self.logScrollPending = false
+                if !self.logScroll.isHidden { self.scrollLogToEnd() }
+            }
+        }
     }
 
     private func scrollLogToEnd() {
+        lastLogScroll = Date()
         logView.scrollToEndOfDocument(nil)
     }
 

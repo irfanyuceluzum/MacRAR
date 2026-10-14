@@ -10,7 +10,10 @@ Ayarlar: signing/asc.json (git dışında) ya da ASC_KEY_ID / ASC_ISSUER / ASC_A
 import base64, hashlib, json, os, subprocess, sys, time, urllib.request, urllib.error
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# Yerel ayarlar git dışında: signing/asc.json  {"key_id": "...", "issuer": "...", "app_id": "..."}
+# Yerel ayarlar git dışında: signing/asc.json
+#   {"key_id": "...", "issuer": "...", "app_id": "...",
+#    "contact": {"first_name": "Ad", "last_name": "Soyad", "phone": "+90…", "email": "ornek@example.com"}}
+# "contact" yalnız `review` komutunda gerekir; ASC_CONTACT_FIRST_NAME / _LAST_NAME / _PHONE / _EMAIL ortam değişkenleri önceliklidir.
 _cfg = {}
 _cfgp = os.path.join(ROOT, "signing", "asc.json")
 if os.path.exists(_cfgp): _cfg = json.load(open(_cfgp))
@@ -93,10 +96,19 @@ def screenshots():
     print("✔ Ekran görüntüleri yüklendi (Apple birkaç dakika içinde işler)")
 
 def review():
+    # İletişim bilgisi kaynak kodda durmaz: ortam değişkeni ya da signing/asc.json "contact" nesnesi
+    _c = _cfg.get("contact", {}) if isinstance(_cfg.get("contact"), dict) else {}
+    contact = {}
+    for attr, env, key in (("contactFirstName", "ASC_CONTACT_FIRST_NAME", "first_name"),
+                           ("contactLastName", "ASC_CONTACT_LAST_NAME", "last_name"),
+                           ("contactPhone", "ASC_CONTACT_PHONE", "phone"),
+                           ("contactEmail", "ASC_CONTACT_EMAIL", "email")):
+        contact[attr] = os.environ.get(env, _c.get(key, ""))
+        if not contact[attr]:
+            raise SystemExit(f'App Review iletişim bilgisi eksik: "{key}". signing/asc.json içinde "contact": {{"{key}": ...}} ya da {env} ortam değişkeni olarak verin')
     ver = mac_version()
     notes = open(os.path.join(ROOT, "docs/appstore/review-notes.txt"), encoding="utf-8").read().split("Notes:\n", 1)[1].strip()
-    attrs = {"contactFirstName": "Mesut", "contactLastName": "Çevik", "contactPhone": "+905437154484",
-             "contactEmail": "mesutcevik@gmail.com", "demoAccountRequired": False, "notes": notes}
+    attrs = {**contact, "demoAccountRequired": False, "notes": notes}
     cur = req("GET", f"/v1/appStoreVersions/{ver['id']}/appStoreReviewDetail").get("data")
     if cur:
         req("PATCH", f"/v1/appStoreReviewDetails/{cur['id']}", {"data": {"type": "appStoreReviewDetails", "id": cur["id"], "attributes": attrs}})

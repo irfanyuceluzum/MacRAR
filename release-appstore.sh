@@ -46,7 +46,13 @@ KEYID=$(python3 -c 'import json;print(json.load(open("signing/asc.json"))["key_i
 ISSUER=$(python3 -c 'import json;print(json.load(open("signing/asc.json"))["issuer"])')
 APPLEID=$(python3 -c 'import json;print(json.load(open("signing/asc.json"))["app_id"])')
 echo "▸ App Store Connect'e yükleniyor"
-xcrun altool --upload-package "$PKG" --type macos --apple-id "$APPLEID" --bundle-id com.mesut.easymacarchiver \
-  --bundle-version "$BUILDNUM" --bundle-short-version-string "$VERSION" --apiKey "$KEYID" --apiIssuer "$ISSUER" 2>&1 | grep -E "UPLOAD SUCCEEDED|ERROR|error" || true
+UPLOAD_RC=0
+UPLOAD_OUT=$(xcrun altool --upload-package "$PKG" --type macos --apple-id "$APPLEID" --bundle-id com.mesut.easymacarchiver \
+  --bundle-version "$BUILDNUM" --bundle-short-version-string "$VERSION" --apiKey "$KEYID" --apiIssuer "$ISSUER" 2>&1) || UPLOAD_RC=$?
+echo "$UPLOAD_OUT" | grep -E "UPLOAD SUCCEEDED|ERROR|error" || true
+if [[ $UPLOAD_RC -ne 0 ]] || ! echo "$UPLOAD_OUT" | grep -q "UPLOAD SUCCEEDED"; then
+  echo "✖ App Store Connect'e yükleme başarısız (altool çıkış kodu: $UPLOAD_RC)" >&2
+  exit 1
+fi
 echo "▸ Apple'ın işlemesi bekleniyor (genellikle 5-15 dk)"
 APPSTORE_BUILD=$BUILDNUM python3 tools-asc/asc.py wait-attach

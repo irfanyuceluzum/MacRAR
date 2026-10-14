@@ -54,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.setActivationPolicy(.regular)
         buildMenu()
         launched = true
+        TempDirs.sweepStale()   // çökme sonrası kalan eski geçici klasörler (arka planda)
         FolderAccess.restore()
         #if APPSTORE
         NSApp.servicesProvider = ServiceProvider()
@@ -174,8 +175,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !headless && !serviceMode }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard RarJob.hasActive else { return .terminateNow }
+        let ok = Dialogs.confirm(L("Süren bir işlem var"),
+                                 L("Çıkarsanız işlem durdurulur ve hedefte yarım kalmış dosyalar olabilir."),
+                                 okTitle: L("Durdur ve Çık"), destructive: true)
+        return ok ? .terminateNow : .terminateCancel
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        RarJob.cancelAll()
         ListJob.cancelAll()
+        // Durdurulan süreçlerin bitmesini en fazla ~2 sn bekle
+        let deadline = Date().addingTimeInterval(2)
+        while RarJob.hasActive, Date() < deadline { usleep(20_000) }
         TempDirs.cleanupAll()
     }
 

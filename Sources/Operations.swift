@@ -130,7 +130,7 @@ enum Ops {
         if info.headersEncrypted { return true }
         guard let names else { return info.hasEncryptedFiles }
         return info.entries.contains { e in
-            e.encrypted && names.contains { n in e.name == n || e.name.hasPrefix(n + "/") }
+            e.encrypted && names.contains { n in e.commandName == n || e.commandName.hasPrefix(n + "/") }
         }
     }
 
@@ -186,7 +186,7 @@ enum Ops {
                                        completion: @escaping (Bool, String?) -> Void) {
         func selected(_ e: ArchiveEntry) -> Bool {
             guard let names else { return true }
-            return names.contains { e.name == $0 || e.name.hasPrefix($0 + "/") }
+            return names.contains { e.commandName == $0 || e.commandName.hasPrefix($0 + "/") }
         }
         guard let password, !info.headersEncrypted, !info.isSolid, !info.details.hasPrefix("7z"),
               let probe = info.entries.filter({ !$0.isDirectory && $0.encrypted && selected($0) })
@@ -194,7 +194,7 @@ enum Ops {
             completion(true, password); return
         }
         DispatchQueue.global(qos: .userInitiated).async {
-            let r = RarRunner.run(.sevenZip, ["t", RarRunner.passwordArg7z(password), "--", info.path, probe.name])
+            let r = RarRunner.run(.sevenZip, ["t", RarRunner.passwordArg7z(password), "--", info.path, probe.commandName])
             DispatchQueue.main.async {
                 guard r.wrongPassword else { completion(true, password); return }
                 guard let p = Dialogs.askPassword(archiveName: name(info.path), wrong: true) else { completion(false, password); return }
@@ -469,7 +469,8 @@ enum Ops {
         guard let names else { return info.topLevelNames }
         var seen = Set<String>()
         return names.compactMap { n in
-            let t = n.split(separator: "/", maxSplits: 1).first.map(String.init) ?? n
+            // names 7zz'ye giden ham adlardır; diskte oluşacak arındırılmış üst düzey ad hesaplanır
+            guard let t = ArchiveEntry.sanitize(n).split(separator: "/", maxSplits: 1).first.map(String.init) else { return nil }
             return seen.insert(t).inserted ? t : nil
         }
     }

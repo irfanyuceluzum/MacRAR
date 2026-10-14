@@ -36,8 +36,12 @@ enum Quarantine {
         for name in (try? fm.contentsOfDirectory(atPath: dest)) ?? [] {
             if info((dest as NSString).appendingPathComponent(name))?.changed == true { roots.insert(name) }
         }
+        let destStd = (dest as NSString).standardizingPath
         for name in roots {
             let root = (dest as NSString).appendingPathComponent(name)
+            // Savunma: dest altında olmayan (".." gibi) kökü tarama (sembolik bağ çözülmeden karşılaştırılır)
+            let rootStd = (root as NSString).standardizingPath
+            guard rootStd != destStd, rootStd.hasPrefix(destStd.hasSuffix("/") ? destStd : destStd + "/") else { continue }
             guard let r = info(root) else { continue }
             if r.changed { tag(root) }
             guard r.isDir, let walker = fm.enumerator(atPath: root) else { continue }
