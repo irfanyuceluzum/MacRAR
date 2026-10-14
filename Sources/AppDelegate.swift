@@ -52,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        Prefs.applyAppearance()
         buildMenu()
         launched = true
         TempDirs.sweepStale()   // çökme sonrası kalan eski geçici klasörler (arka planda)

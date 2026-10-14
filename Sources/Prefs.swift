@@ -37,6 +37,17 @@ enum Prefs {
     }
     /// "" = sistem dili, "tr", "en"
     static var language: String { get { d.string(forKey: "Language") ?? "" } set { d.set(newValue, forKey: "Language") } }
+    /// "" = sistemi izle, "light", "dark"
+    static var appearance: String { get { d.string(forKey: "Appearance") ?? "" } set { d.set(newValue, forKey: "Appearance") } }
+
+    /// Görünüm tercihini tüm uygulamaya uygular (açık pencereler hemen güncellenir)
+    static func applyAppearance() {
+        switch appearance {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: NSApp.appearance = nil
+        }
+    }
 }
 
 /// Ayarlar penceresi (⌘,)
@@ -51,6 +62,7 @@ final class PreferencesWindowController: NSWindowController {
     private let revealCompressBox = NSButton(checkboxWithTitle: L("Sıkıştırma bitince arşivi Finder'da göster"), target: nil, action: nil)
     private let updatesBox = NSButton(checkboxWithTitle: L("Günde bir kez GitHub'dan güncelleme denetle"), target: nil, action: nil)
     private let languagePopup = NSPopUpButton()
+    private let appearancePopup = NSPopUpButton()
     private let languageNote = NSTextField(labelWithString: L("Dil değişikliği uygulama yeniden açılınca geçerli olur."))
     private let toolStatus = NSTextField(labelWithString: "")
     private lazy var toolButton = NSButton(title: "", target: self, action: #selector(toolAction))
@@ -71,10 +83,11 @@ final class PreferencesWindowController: NSWindowController {
         formatPopup.addItems(withTitles: ArchiveFormat.creatable.map { $0.title })
         levelPopup.addItems(withTitles: [L("Depola (sıkıştırma yok)"), L("En hızlı"), L("Hızlı"), L("Normal"), L("İyi"), L("En iyi")])
         languagePopup.addItems(withTitles: [L("Sistem dili"), "Türkçe", "English"])
+        appearancePopup.addItems(withTitles: [L("Sistem"), L("Açık"), L("Koyu")])
         languageNote.font = .systemFont(ofSize: 10)
         languageNote.textColor = .secondaryLabelColor
         for b in [solidBox, rrBox, macBox, revealExtractBox, revealCompressBox, updatesBox] { b.target = self; b.action = #selector(changed) }
-        for p in [formatPopup, levelPopup, languagePopup] { p.target = self; p.action = #selector(changed) }
+        for p in [formatPopup, levelPopup, languagePopup, appearancePopup] { p.target = self; p.action = #selector(changed) }
 
         let header1 = NSTextField(labelWithString: L("Hızlı sıkıştırma varsayılanları")); header1.font = .boldSystemFont(ofSize: 12)
         let header2 = NSTextField(labelWithString: L("Davranış")); header2.font = .boldSystemFont(ofSize: 12)
@@ -91,6 +104,7 @@ final class PreferencesWindowController: NSWindowController {
             [NSGridCell.emptyContentView, updatesBox],
             [label(L("Dil:")), languagePopup],
             [NSGridCell.emptyContentView, languageNote],
+            [label(L("Görünüm:")), appearancePopup],
             [label(AppInfo.isAppStore ? L("Klasörler:") : L("RAR aracı:")), toolStatus],
             [NSGridCell.emptyContentView, toolButton],
             [label(L("Dosyalar:")), NSButton(title: L("Dosya İlişkilendirmeleri…"), target: AppDelegate.shared, action: #selector(AppDelegate.showAssociations(_:)))],
@@ -151,6 +165,7 @@ final class PreferencesWindowController: NSWindowController {
         revealCompressBox.state = Prefs.revealAfterCompress ? .on : .off
         updatesBox.state = Prefs.checkUpdates ? .on : .off
         languagePopup.selectItem(at: Prefs.language == "tr" ? 1 : (Prefs.language == "en" ? 2 : 0))
+        appearancePopup.selectItem(at: Prefs.appearance == "light" ? 1 : (Prefs.appearance == "dark" ? 2 : 0))
     }
 
     @objc private func changed() {
@@ -165,6 +180,8 @@ final class PreferencesWindowController: NSWindowController {
         Prefs.revealAfterCompress = revealCompressBox.state == .on
         Prefs.checkUpdates = updatesBox.state == .on
         Prefs.language = ["", "tr", "en"][languagePopup.indexOfSelectedItem]
+        let appearance = ["", "light", "dark"][max(0, appearancePopup.indexOfSelectedItem)]
+        if appearance != Prefs.appearance { Prefs.appearance = appearance; Prefs.applyAppearance() }
     }
 
     func show() {
