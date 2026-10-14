@@ -103,7 +103,7 @@ enum Associations {
         alert.accessoryView = container
         alert.addButton(withTitle: L("Varsayılan Yap"))
         alert.addButton(withTitle: L("Şimdi Değil"))
-        if ProcessInfo.processInfo.environment["MACRAR_DEBUG_ASSOC"] == "show" {
+        if DebugHooks.env("MACRAR_DEBUG_ASSOC") == "show" {
             // ekran görüntüsü için pencereyi açık bırak
         }
         guard alert.runModal() == .alertFirstButtonReturn else { return false }

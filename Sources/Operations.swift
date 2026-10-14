@@ -158,20 +158,49 @@ enum Ops {
             guard let p = Dialogs.askPassword(archiveName: name(info.path)) else { completion(false, nil); return }
             pw = p
         }
-        // Üzerine yazma kontrolü
-        let tops = topLevelNames(info: info, names: names)
-        let existing = tops.filter { FileManager.default.fileExists(atPath: (dest as NSString).appendingPathComponent($0)) }
-        var mode: OverwriteArg = .overwrite
-        if !existing.isEmpty {
-            switch Dialogs.askOverwrite(existing: existing, dest: dest) {
-            case .overwrite: mode = .overwrite
-            case .rename: mode = .rename
-            case .skip: mode = .skip
-            case .cancel: completion(false, pw); return
+        verifyPassword(info: info, names: names, password: pw) { ok, pw in
+            guard ok else { completion(false, pw); return }
+            // Üzerine yazma kontrolü
+            let tops = topLevelNames(info: info, names: names)
+            let existing = tops.filter { FileManager.default.fileExists(atPath: (dest as NSString).appendingPathComponent($0)) }
+            var mode: OverwriteArg = .overwrite
+            if !existing.isEmpty {
+                switch Dialogs.askOverwrite(existing: existing, dest: dest) {
+                case .overwrite: mode = .overwrite
+                case .rename: mode = .rename
+                case .skip: mode = .skip
+                case .cancel: completion(false, pw); return
+                }
+            }
+            let count = names == nil ? info.entries.count : nil
+            runExtract(info: info, names: names, dest: dest, password: pw, mode: mode, host: host, count: count, quiet: quiet, completion: completion)
+        }
+    }
+
+    /// ZIP ve RAR'da yanlış şifreyle çıkartma hedefte boş (0 bayt) dosyalar bırakır; yeniden denemede "Atla" ya da
+    /// "Yeniden Adlandır" seçildiyse bu boş dosyalar yerinde kalır. Bu yüzden şifre önce seçimdeki en küçük şifreli
+    /// dosya test edilerek doğrulanır. 7z yanlış şifrede dosya bırakmaz; katı arşivde tek dosyayı test etmek uzun
+    /// sürebileceği için ikisinde de atlanır. Şifreli başlıklı arşivlerde şifre listelemede zaten doğrulanmıştır.
+    /// completion(devam edilsin mi, kullanılacak şifre)
+    private static func verifyPassword(info: ArchiveInfo, names: [String]?, password: String?,
+                                       completion: @escaping (Bool, String?) -> Void) {
+        func selected(_ e: ArchiveEntry) -> Bool {
+            guard let names else { return true }
+            return names.contains { e.name == $0 || e.name.hasPrefix($0 + "/") }
+        }
+        guard let password, !info.headersEncrypted, !info.isSolid, !info.details.hasPrefix("7z"),
+              let probe = info.entries.filter({ !$0.isDirectory && $0.encrypted && selected($0) })
+                  .min(by: { $0.packedSize < $1.packedSize }) else {
+            completion(true, password); return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let r = RarRunner.run(.sevenZip, ["t", RarRunner.passwordArg7z(password), "--", info.path, probe.name])
+            DispatchQueue.main.async {
+                guard r.wrongPassword else { completion(true, password); return }
+                guard let p = Dialogs.askPassword(archiveName: name(info.path), wrong: true) else { completion(false, password); return }
+                verifyPassword(info: info, names: names, password: p, completion: completion)
             }
         }
-        let count = names == nil ? info.entries.count : nil
-        runExtract(info: info, names: names, dest: dest, password: pw, mode: mode, host: host, count: count, quiet: quiet, completion: completion)
     }
 
     private static func runExtract(info: ArchiveInfo, names: [String]?, dest: String, password: String?, mode: OverwriteArg,
@@ -428,7 +457,11 @@ enum Ops {
         }
         // ad.tar.gz → ad
         if base.lowercased().hasSuffix(".tar") { base = String(base.dropLast(4)) }
-        return (ns.deletingLastPathComponent as NSString).appendingPathComponent(base)
+        let folder = (ns.deletingLastPathComponent as NSString).appendingPathComponent(base)
+        // Aynı adda bir dosya varsa (uzantısız arşivin kendisi ya da "ad.zip" yanındaki "ad" dosyası) içine çıkartılamaz:
+        // Arşiv İzlencesi gibi "ad 2" kullan. Aynı adlı klasör varsa olduğu gibi kullanılır (üzerine yazma sorusu gelir).
+        if FileManager.default.fileExists(atPath: folder), !isDirectoryPath(folder) { return uniquePath(folder) }
+        return folder
     }
 
     /// Çıkartılacak üst düzey adlar (names nil → tüm arşiv)

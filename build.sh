@@ -28,6 +28,11 @@ else
   SWIFT_FLAGS=()
 fi
 APP="$BUILD/$APPNAME.app"
+# Otomatik test kancaları (MACRAR_DEBUG_*, MACRAR_SNAPSHOT) yalnızca istenince derlenir:  MACRAR_DEBUG_HOOKS=1 ./build.sh
+if [[ -n "$MACRAR_DEBUG_HOOKS" ]]; then
+  SWIFT_FLAGS+=(-D MACRAR_DEBUG_HOOKS)
+  echo "▸ Test kancaları açık (MACRAR_DEBUG_HOOKS)"
+fi
 
 echo "▸ [$VARIANT] Temizleniyor"
 rm -rf "$APP"

@@ -17,6 +17,7 @@ if [[ -z "$APPSTORE_BUILD" ]]; then
   fi
 fi
 echo "▸ Sürüm $APPSTORE_VERSION, build $APPSTORE_BUILD"
+unset MACRAR_DEBUG_HOOKS   # App Store paketine test kancaları girmesin
 ./build.sh appstore
 APP="build/Easy Mac Archiver.app"
 PROFILE="signing/EasyMacArchiver_MAS.provisionprofile"

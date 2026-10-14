@@ -14,6 +14,8 @@ set -e
 cd "$(dirname "$0")"
 APP="build/MacRAR.app"
 # Her zaman yeniden derle: eski bir build/ kopyası Info.plist'teki sürümden geride kalabilir (1.4.3'te yaşandı)
+# Yayın sürümüne test kancaları girmesin
+unset MACRAR_DEBUG_HOOKS
 ./build.sh
 PROFILE="${PROFILE:-MacRAR}"
 if [[ -z "$IDENTITY" ]]; then

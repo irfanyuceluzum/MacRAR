@@ -131,7 +131,7 @@ Desteklenen bayraklar: `--extract-here`, `--extract-folder`, `--extract-to`, `--
 
 ## Geliştirici notları
 
-Otomatik test için ortam değişkenleri (ekran kaydı izni gerektirmez):
+Otomatik test için ortam değişkenleri (ekran kaydı izni gerektirmez). `MACRAR_SNAPSHOT*` ve `MACRAR_DEBUG_*` yalnızca `MACRAR_DEBUG_HOOKS=1 ./build.sh` ile yapılan derlemelerde çalışır; yayın sürümü bunları yok sayar.
 
 | Değişken | Etkisi |
 |---|---|

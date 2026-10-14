@@ -167,7 +167,13 @@ enum RarRunner {
     static func makeProcess(_ tool: RarTool, _ args: [String], cwd: String?) -> Process {
         let p = Process()
         p.executableURL = url(tool)
-        p.arguments = args
+        // 7zz dosya adlarındaki * ve ? karakterlerini joker sayar: "st*r.txt" silinirken "stXr.txt" de silinir.
+        // -spd ile adlar olduğu gibi eşleşir (komuttan hemen sonra; tüm komutlarda geçerli)
+        if tool == .sevenZip, let cmd = args.first {
+            p.arguments = [cmd, "-spd"] + args.dropFirst()
+        } else {
+            p.arguments = args
+        }
         var env = ProcessInfo.processInfo.environment
         env["LANG"] = "en_US.UTF-8"
         env["LC_ALL"] = "en_US.UTF-8"

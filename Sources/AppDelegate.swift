@@ -62,16 +62,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !isDefaultLaunch, pendingFiles.isEmpty, pendingCommand == nil { launchedForService = true }
         #endif
         scheduleDebugSnapshot()
-        if ProcessInfo.processInfo.environment["MACRAR_DEBUG_ABOUT"] != nil { showAbout(nil) }
-        if ProcessInfo.processInfo.environment["MACRAR_DEBUG_PREFS"] != nil { showPreferences(nil) }
-        if let e = ProcessInfo.processInfo.environment["MACRAR_DEBUG_ASSOC_APPLY"] {
+        if DebugHooks.env("MACRAR_DEBUG_ABOUT") != nil { showAbout(nil) }
+        if DebugHooks.env("MACRAR_DEBUG_PREFS") != nil { showPreferences(nil) }
+        if let e = DebugHooks.env("MACRAR_DEBUG_ASSOC_APPLY") {
             Associations.apply(Associations.types(for: [e]), quiet: true) { ok, failed in
                 print("assoc \(e): ok=\(ok) failed=\(failed) handler=\(Associations.currentHandler(for: [e]))"); exit(0)
             }
             return
         }
         #if !APPSTORE
-        if let p = ProcessInfo.processInfo.environment["MACRAR_DEBUG_RARINSTALL"] {
+        if let p = DebugHooks.env("MACRAR_DEBUG_RARINSTALL") {
             do { try RarTools.install(from: URL(fileURLWithPath: p)); print("RAR kuruldu:", RarTools.version ?? "?", RarTools.installDir) }
             catch { print("RAR kurulamadı:", error.localizedDescription) }
             exit(0)
@@ -105,10 +105,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { if Prefs.checkUpdates { UpdateChecker.checkAutomatically() } }
         #endif
         // İlk açılışta dosya ilişkilendirme önerisi (yalnızca Uygulamalar klasöründen çalışırken; şifre sorusu vb. açıksa bekler)
-        if Bundle.main.bundlePath.hasPrefix("/Applications/") || ProcessInfo.processInfo.environment["MACRAR_DEBUG_ASSOC"] != nil {
+        if Bundle.main.bundlePath.hasPrefix("/Applications/") || DebugHooks.env("MACRAR_DEBUG_ASSOC") != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 Dialogs.whenIdle {
-                    if ProcessInfo.processInfo.environment["MACRAR_DEBUG_ASSOC"] != nil { Associations.show(firstLaunch: true) }
+                    if DebugHooks.env("MACRAR_DEBUG_ASSOC") != nil { Associations.show(firstLaunch: true) }
                     else { Associations.promptIfFirstLaunch() }
                 }
             }
@@ -142,7 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        if let log = ProcessInfo.processInfo.environment["MACRAR_DEBUG_LOG"] {
+        if let log = DebugHooks.env("MACRAR_DEBUG_LOG") {
             let line = "\(Date().timeIntervalSince1970) openFiles(\(filenames.count)): \(filenames.map { ($0 as NSString).lastPathComponent }) launched=\(launched) modal=\(NSApp.modalWindow != nil)\n"
             if let h = FileHandle(forWritingAtPath: log) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile() }
             else { try? line.write(toFile: log, atomically: true, encoding: .utf8) }
@@ -290,13 +290,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard !existing.isEmpty else { self.finishCommand(); return }
             var opts = CompressOptions.withDefaults(for: existing)
             // Hata ayıklama: MACRAR_DEBUG_FORMAT=zip|7z|tar.gz…, MACRAR_DEBUG_PASSWORD ve MACRAR_DEBUG_DELETE ile biçim/şifre/kaynak silme seçimi
-            if let f = ProcessInfo.processInfo.environment["MACRAR_DEBUG_FORMAT"],
+            if let f = DebugHooks.env("MACRAR_DEBUG_FORMAT"),
                let fmt = ArchiveFormat.allCases.first(where: { $0.ext == f }) {
                 opts.format = fmt
                 opts.archivePath = CompressOptions.defaultArchivePath(for: existing, format: fmt)
-                opts.password = ProcessInfo.processInfo.environment["MACRAR_DEBUG_PASSWORD"]
-                opts.encryptNames = ProcessInfo.processInfo.environment["MACRAR_DEBUG_ENCNAMES"] != nil
-                opts.deleteAfter = ProcessInfo.processInfo.environment["MACRAR_DEBUG_DELETE"] != nil
+                opts.password = DebugHooks.env("MACRAR_DEBUG_PASSWORD")
+                opts.encryptNames = DebugHooks.env("MACRAR_DEBUG_ENCNAMES") != nil
+                opts.deleteAfter = DebugHooks.env("MACRAR_DEBUG_DELETE") != nil
             }
             Ops.compress(items: existing, options: opts, host: nil) { ok, path in
                 if ok, Prefs.revealAfterCompress { Ops.revealInFinder(path) }
@@ -373,8 +373,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Hata ayıklama: MACRAR_SNAPSHOT=/yol/önek → açık pencereleri PNG olarak kaydedip çıkar
 
     private func scheduleDebugSnapshot() {
-        guard let prefix = ProcessInfo.processInfo.environment["MACRAR_SNAPSHOT"] else { return }
-        let delay = Double(ProcessInfo.processInfo.environment["MACRAR_SNAPSHOT_DELAY"] ?? "") ?? 2.0
+        guard let prefix = DebugHooks.env("MACRAR_SNAPSHOT") else { return }
+        let delay = Double(DebugHooks.env("MACRAR_SNAPSHOT_DELAY") ?? "") ?? 2.0
         let timer = Timer(timeInterval: delay, repeats: false) { _ in
             var i = 0
             for w in NSApp.windows where w.isVisible {

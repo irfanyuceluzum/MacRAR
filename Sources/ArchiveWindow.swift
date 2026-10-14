@@ -437,20 +437,20 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
         if root.children.count == 1, let only = root.children.first, only.isDir {
             outline.expandItem(only)
         }
-        if ProcessInfo.processInfo.environment["MACRAR_DEBUG_EXPAND"] != nil {
+        if DebugHooks.env("MACRAR_DEBUG_EXPAND") != nil {
             outline.expandItem(nil, expandChildren: true)
         }
-        if let sort = ProcessInfo.processInfo.environment["MACRAR_DEBUG_SORT"] {   // örn. size:desc
+        if let sort = DebugHooks.env("MACRAR_DEBUG_SORT") {   // örn. size:desc
             let parts = sort.split(separator: ":")
             outline.sortDescriptors = [NSSortDescriptor(key: String(parts[0]), ascending: parts.count < 2 || parts[1] != "desc")]
         }
-        if let size = ProcessInfo.processInfo.environment["MACRAR_DEBUG_WINDOW"] {
+        if let size = DebugHooks.env("MACRAR_DEBUG_WINDOW") {
             let parts = size.split(separator: "x").compactMap { Double($0) }
             if parts.count == 2 { window?.setContentSize(NSSize(width: parts[0], height: parts[1])) }
         }
         updateStatus()
         NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
-        if let dest = ProcessInfo.processInfo.environment["MACRAR_DEBUG_DRAG"] { simulateDrag(to: dest) }
+        if let dest = DebugHooks.env("MACRAR_DEBUG_DRAG") { simulateDrag(to: dest) }
     }
 
     /// Hata ayıklama: ilk üst düzey öğeleri Finder'a sürüklenmiş gibi hedefe yazar

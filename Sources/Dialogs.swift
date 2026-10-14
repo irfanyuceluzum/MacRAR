@@ -16,7 +16,7 @@ enum Dialogs {
     }
 
     static func askPassword(archiveName: String, wrong: Bool = false) -> String? {
-        if let dbg = ProcessInfo.processInfo.environment["MACRAR_DEBUG_PASSWORD"], !wrong { return dbg == "__cancel__" ? nil : dbg }
+        if let dbg = DebugHooks.env("MACRAR_DEBUG_PASSWORD"), !wrong { return dbg == "__cancel__" ? nil : dbg }
         activate()
         let alert = NSAlert()
         alert.messageText = wrong ? L("Şifre hatalı") : L("Şifre gerekli")
@@ -67,7 +67,7 @@ enum Dialogs {
     enum OverwriteMode { case overwrite, rename, skip, cancel }
 
     static func askOverwrite(existing: [String], dest: String) -> OverwriteMode {
-        switch ProcessInfo.processInfo.environment["MACRAR_DEBUG_OVERWRITE"] {
+        switch DebugHooks.env("MACRAR_DEBUG_OVERWRITE") {
         case "overwrite": return .overwrite
         case "rename": return .rename
         case "skip": return .skip
@@ -131,7 +131,7 @@ enum Dialogs {
     }
 
     static func confirm(_ title: String, _ detail: String, okTitle: String = L("Tamam"), destructive: Bool = false) -> Bool {
-        if ProcessInfo.processInfo.environment["MACRAR_DEBUG_CONFIRM"] != nil { return true }
+        if DebugHooks.env("MACRAR_DEBUG_CONFIRM") != nil { return true }
         activate()
         let alert = NSAlert()
         alert.messageText = title
@@ -340,8 +340,8 @@ final class ProgressPanel: NSWindowController {
         self.host = host
         guard let w = window else { return }
         resizeToFit(animate: false)
-        if ProcessInfo.processInfo.environment["MACRAR_DEBUG_DETAILS"] != nil { toggleDetails() }
-        if ProcessInfo.processInfo.environment["MACRAR_DEBUG_DETAILS"] == "toggle" { toggleDetails() }
+        if DebugHooks.env("MACRAR_DEBUG_DETAILS") != nil { toggleDetails() }
+        if DebugHooks.env("MACRAR_DEBUG_DETAILS") == "toggle" { toggleDetails() }
         if let host, host.isVisible {
             host.beginSheet(w)
         } else {
