@@ -81,6 +81,7 @@ enum L10n {
         "Çıkartma bitince öğeleri Finder'da göster": "Reveal extracted items in Finder", "Sıkıştırma bitince arşivi Finder'da göster": "Reveal the new archive in Finder",
         "Günde bir kez GitHub'dan güncelleme denetle": "Check GitHub for updates once a day", "Dil:": "Language:", "Sistem dili": "System language",
         "Dil değişikliği uygulama yeniden açılınca geçerli olur.": "Language changes take effect after relaunching the app.",
+        "Görünüm:": "Appearance:", "Sistem": "System", "Açık": "Light", "Koyu": "Dark",
         // Görünüm / klavye
         "Görünüm": "View", "Tümünü Genişlet": "Expand All", "Tümünü Daralt": "Collapse All", "Yenile": "Refresh", "Arşivi Finder'da Göster": "Show Archive in Finder",
         "Göz At": "Quick Look", "Son Kullanılanlar": "Open Recent", "Listeyi Temizle": "Clear Menu", "Yeni Arşiv…": "New Archive…",
