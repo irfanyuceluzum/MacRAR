@@ -1,19 +1,25 @@
-## MacRAR 1.4.3
+## MacRAR 1.5.0 (irfanyuceluzum fork)
 
-Signed with Developer ID and notarized by Apple: open the DMG, drag MacRAR to Applications, done. Or `brew install --cask mstcvk/tap/macrar`.
+Bu sürüm Apple onaylı değildir: ilk açılışta macOS uyarı verirse uygulamaya sağ tıklayıp **Aç**'ı seçin (ya da Sistem Ayarları → Gizlilik ve Güvenlik → **Yine de Aç**). Güncellemeler bu fork'tan denetlenir.
 
-**Finder and first launch**
-- Fixed a broken type declaration in Info.plist: CAB, ARJ, LZH, ZST, CPIO, WIM, DEB, RPM, MSI, CHM, VHD and other 7-Zip formats now show the right-click commands and appear in the File Associations dialog.
-- When launched from the DMG, Downloads or the Desktop, MacRAR offers to move itself to Applications and relaunch, since the Finder menu and file associations only work from there.
-- The first-launch File Associations prompt and the update alert no longer pop up on top of an open password or progress dialog.
-- Old-style multi-volume sets (`name.rar` + `name.r00`…, `name.zip` + `name.z01`…) selected together are processed once.
+**Veri güvenliği**
+- tar.gz/xz/bz2 + "kaynak dosyaları sil": iptal ya da hata durumunda kaynaklar artık kaybolmuyor; yalnız tüm adımlar başarılıysa çöpe taşınıyor.
+- Finder'a sürüklemede aynı adlı öğe sorulmadan silinmiyor (üzerine yaz / yeniden adlandır / atla; eskisi çöpe).
+- Dosya adlarındaki `*` ve `?` artık joker sayılmıyor ("st*r.txt" silinirken "stXr.txt" silinmiyor).
+- ZIP'te yanlış şifre artık hedefte boş dosyalar bırakmıyor.
 
-**Other fixes**
-- "Download" in the update alert fetches the DMG directly.
-- Dropping a mixed selection onto an open archive adds every dropped item (archive files were silently skipped).
-- Opening an unreadable file no longer closes a window you already had open.
-- New Help menu: user guide, release notes, report a problem.
+**Doğruluk ve güvenlik**
+- Bozuk tar.gz arşivleri artık "Test başarılı" görünmüyor.
+- `../` içeren arşivler hedef klasörün dışına dokunmuyor; geçici (şifresi çözülmüş) dosyalar daha erken siliniyor.
+- Süren bir işlem varken çıkınca uyarı geliyor; arkada 7zz süreci kalmıyor.
 
-**Requirements:** macOS 13+ (Apple Silicon and Intel). Creating RAR archives needs RARLAB's RAR for macOS (paid, 40-day trial); everything else is free.
+**Yenilikler**
+- Büyük arşivler arka planda açılıyor ("Yükleniyor…" + İptal), arama yazarken takılmıyor.
+- Ayarlar → Görünüm: Sistem / Açık / Koyu.
+- `.DS_Store` ve `__MACOSX` arşive eklenmiyor (Ayarlar'dan kapatılabilir; RAR'da uygulanmaz).
 
-Also on the Mac App Store as **Easy Mac Archiver**.
+---
+
+**English:** Unofficial build from the irfanyuceluzum fork (not notarized: right-click → Open on first launch). Data-loss fixes for tar.gz with "delete source files" and drag-to-Finder, literal `*`/`?` in file names, no empty files after a wrong ZIP password, corrupt tar.gz no longer reported as OK, safer handling of `../` entries and temporary files, stop running jobs on quit, background loading, Appearance setting, and an option (on by default) to leave `.DS_Store` / `__MACOSX` out of new archives.
+
+**Requirements:** macOS 13+ (Apple Silicon and Intel).
