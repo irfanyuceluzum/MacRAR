@@ -67,6 +67,13 @@ enum Dialogs {
     enum OverwriteMode { case overwrite, rename, skip, cancel }
 
     static func askOverwrite(existing: [String], dest: String) -> OverwriteMode {
+        switch ProcessInfo.processInfo.environment["MACRAR_DEBUG_OVERWRITE"] {
+        case "overwrite": return .overwrite
+        case "rename": return .rename
+        case "skip": return .skip
+        case "cancel": return .cancel
+        default: break
+        }
         activate()
         let alert = NSAlert()
         alert.messageText = L("Hedefte aynı adlı öğeler var")
@@ -345,7 +352,22 @@ final class ProgressPanel: NSWindowController {
         }
     }
 
+    /// Yüzdesi bilinmeyen işler (listeleme gibi): çubuk ve detaylar gizlenir, durum metni ve geçen süre gösterilir
+    func setActivity(_ text: String) {
+        fileLabel.stringValue = text
+        bar.isHidden = true
+        toggleButton.isHidden = true
+        activityTimer?.invalidate()
+        activityTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.detailLabel.stringValue = LF("geçen %@", Self.format(Date().timeIntervalSince(self.startTime)))
+        }
+    }
+    private var activityTimer: Timer?
+
     func dismiss() {
+        activityTimer?.invalidate()
+        activityTimer = nil
         guard let w = window else { return }
         if let host, host.isVisible, host.attachedSheet == w {
             host.endSheet(w)
@@ -485,6 +507,8 @@ struct CompressOptions {
         let tool: RarTool
         let args: [String]
         var cleanup: (() -> Void)? = nil
+        /// Bu adım ve öncekilerin hepsi uyarısız (kod 0) bitince çöpe taşınacak kaynaklar
+        var deleteOnSuccess: [String] = []
     }
 
     /// 0-5 düzeyini 7zz -mx değerine çevirir
@@ -528,13 +552,20 @@ struct CompressOptions {
 
         case .tgz, .txz, .tbz2:
             let outer: String = format == .tgz ? "gzip" : (format == .txz ? "xz" : "bzip2")
-            let tmpTar = NSTemporaryDirectory() + "Archiver-\(UUID().uuidString).tar"
-            var step1 = ["a", "-y", "-bsp1", "-bb1", "-ttar"]
-            if deleteAfter { step1.append("-sdel") }
+            // Geçici tar, arşivle aynı adı taşır: gzip başlığına bu ad yazılır ("ad.tar.gz" → "ad.tar")
+            let tmpDir = TempDirs.make()
+            try? FileManager.default.createDirectory(atPath: tmpDir, withIntermediateDirectories: true)
+            var tarName = ((archivePath as NSString).lastPathComponent as NSString).deletingPathExtension
+            if !tarName.lowercased().hasSuffix(".tar") { tarName += ".tar" }
+            let tmpTar = (tmpDir as NSString).appendingPathComponent(tarName)
+            // -sdel 1. adıma verilmez: sıkıştırma iptal edilir ya da başarısız olursa kaynaklar kaybolurdu.
+            // Kaynaklar ancak son adım da başarıyla bitince silinir.
+            let step1 = ["a", "-y", "-bsp1", "-bb1", "-ttar"]
             let step2 = ["a", "-y", "-bsp1", "-bb1", "-t\(outer)", "-mx=\(mx)", "--", archivePath, tmpTar]
             return [
                 Step(title: L("Paketleniyor"), tool: .sevenZip, args: step1 + ["--", tmpTar] + items),
-                Step(title: L("Sıkıştırılıyor"), tool: .sevenZip, args: step2, cleanup: { try? FileManager.default.removeItem(atPath: tmpTar) }),
+                Step(title: L("Sıkıştırılıyor"), tool: .sevenZip, args: step2, cleanup: { try? FileManager.default.removeItem(atPath: tmpDir) },
+                     deleteOnSuccess: deleteAfter ? items : []),
             ]
         }
     }

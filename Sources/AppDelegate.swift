@@ -174,7 +174,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !headless && !serviceMode }
 
-    func applicationWillTerminate(_ notification: Notification) { TempDirs.cleanupAll() }
+    func applicationWillTerminate(_ notification: Notification) {
+        ListJob.cancelAll()
+        TempDirs.cleanupAll()
+    }
 
     @objc func showPreferences(_ sender: Any?) { PreferencesWindowController.shared.show() }
 
@@ -224,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let wc: ArchiveWindowController
         var created = false
-        if let reuse, reuse.info == nil {
+        if let reuse, reuse.info == nil, reuse.archivePath == nil {   // yüklenmekte olan pencere yeniden kullanılmaz
             wc = reuse
         } else if let empty = windows.first(where: { $0.info == nil && $0.archivePath == nil }) {
             wc = empty
@@ -235,9 +238,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         wc.showWindow(nil)
         wc.window?.makeKeyAndOrderFront(nil)
-        wc.open(path)
-        // Açılamadıysa yalnızca bu iş için yaratılan pencere kapanır; kullanıcının boş penceresi yerinde kalır
-        if wc.info == nil, created, windows.count > 1 { wc.close() }
+        wc.open(path) { [weak self, weak wc] ok in
+            // Açılamadıysa yalnızca bu iş için yaratılan pencere kapanır; kullanıcının boş penceresi yerinde kalır
+            guard let self, let wc, !ok, created, self.windows.count > 1 else { return }
+            wc.close()
+        }
     }
 
     /// Seçenek penceresi gösterip sıkıştırır. completion(oluşan arşiv yolu / nil)
@@ -284,13 +289,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let existing = items.filter { FileManager.default.fileExists(atPath: $0) }
             guard !existing.isEmpty else { self.finishCommand(); return }
             var opts = CompressOptions.withDefaults(for: existing)
-            // Hata ayıklama: MACRAR_DEBUG_FORMAT=zip|7z|tar.gz… ve MACRAR_DEBUG_PASSWORD ile biçim/şifre seçimi
+            // Hata ayıklama: MACRAR_DEBUG_FORMAT=zip|7z|tar.gz…, MACRAR_DEBUG_PASSWORD ve MACRAR_DEBUG_DELETE ile biçim/şifre/kaynak silme seçimi
             if let f = ProcessInfo.processInfo.environment["MACRAR_DEBUG_FORMAT"],
                let fmt = ArchiveFormat.allCases.first(where: { $0.ext == f }) {
                 opts.format = fmt
                 opts.archivePath = CompressOptions.defaultArchivePath(for: existing, format: fmt)
                 opts.password = ProcessInfo.processInfo.environment["MACRAR_DEBUG_PASSWORD"]
                 opts.encryptNames = ProcessInfo.processInfo.environment["MACRAR_DEBUG_ENCNAMES"] != nil
+                opts.deleteAfter = ProcessInfo.processInfo.environment["MACRAR_DEBUG_DELETE"] != nil
             }
             Ops.compress(items: existing, options: opts, host: nil) { ok, path in
                 if ok, Prefs.revealAfterCompress { Ops.revealInFinder(path) }
@@ -341,28 +347,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func processArchives(_ archives: [String], dest: @escaping (String) -> String, index: Int = 0) {
         guard index < archives.count else { finishCommand(); return }
         let a = archives[index]
-        var pw: String? = nil
-        guard let info = Ops.listInteractive(archive: a, password: &pw) else {
-            processArchives(archives, dest: dest, index: index + 1)
-            return
-        }
-        let target = dest(a)
-        Ops.extract(info: info, names: nil, dest: target, password: pw, host: nil) { [weak self] ok, _ in
-            if ok, index == archives.count - 1 { Ops.revealExtracted(info: info, names: nil, dest: target) }
-            self?.processArchives(archives, dest: dest, index: index + 1)
+        Ops.list(archive: a, password: nil, showPanel: true) { [weak self] info, pw in
+            guard let self else { return }
+            guard let info else { self.processArchives(archives, dest: dest, index: index + 1); return }
+            let target = dest(a)
+            Ops.extract(info: info, names: nil, dest: target, password: pw, host: nil) { [weak self] ok, _ in
+                if ok, index == archives.count - 1 { Ops.revealExtracted(info: info, names: nil, dest: target) }
+                self?.processArchives(archives, dest: dest, index: index + 1)
+            }
         }
     }
 
     private func testArchives(_ archives: [String], index: Int = 0) {
         guard index < archives.count else { finishCommand(); return }
         let a = archives[index]
-        var pw: String? = nil
-        guard let info = Ops.listInteractive(archive: a, password: &pw) else {
-            testArchives(archives, index: index + 1)
-            return
-        }
-        Ops.test(info: info, password: pw, host: nil) { [weak self] _, _ in
-            self?.testArchives(archives, index: index + 1)
+        Ops.list(archive: a, password: nil, showPanel: true) { [weak self] info, pw in
+            guard let self else { return }
+            guard let info else { self.testArchives(archives, index: index + 1); return }
+            Ops.test(info: info, password: pw, host: nil) { [weak self] _, _ in
+                self?.testArchives(archives, index: index + 1)
+            }
         }
     }
 
@@ -387,6 +391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     i += 1
                 }
             }
+            ListJob.cancelAll()
             exit(0)
         }
         RunLoop.main.add(timer, forMode: .common)

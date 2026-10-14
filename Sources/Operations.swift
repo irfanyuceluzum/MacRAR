@@ -32,9 +32,12 @@ enum Ops {
                 panel.setFraction(Double(pct) / 100.0)
             }
         }
+        // panel ↔ job iş sürerken birbirini canlı tutar; bitince döngü kırılır (yoksa ikisi de sızar)
         panel.onCancel = { job.cancel() }
         panel.show(on: host)
-        job.start(stages: stages, cwd: cwd) { result in
+        job.start(stages: stages, cwd: cwd) { [weak job] result in
+            job?.onEvent = nil
+            panel.onCancel = nil
             panel.dismiss()
             completion(result)
         }
@@ -50,30 +53,73 @@ enum Ops {
 
     // MARK: Listeleme (şifre döngüsüyle)
 
-    /// Arşivi listeler; gerekirse şifre sorar. İptalde nil döner.
-    static func listInteractive(archive: String, password: inout String?) -> ArchiveInfo? {
+    /// Süren bir listeleme (şifre denemeleri boyunca aynı tutamaç); iptal edilebilir
+    final class ListTask {
+        fileprivate var job: ListJob?
+        private(set) var cancelled = false
+        func cancel() { cancelled = true; job?.cancel() }
+    }
+
+    /// Arşivi arka planda listeler; gerekirse şifre sorar (soru ana iş parçacığında).
+    /// completion(info, kullanılan şifre) her zaman ana kuyrukta ve asenkron çağrılır; iptal / hatada info nil.
+    /// showPanel: penceresi olmayan çağrılar (Finder komutları) için uzun süren listelemede iptal edilebilir ilerleme penceresi
+    @discardableResult
+    static func list(archive: String, password: String?, showPanel: Bool = false, host: NSWindow? = nil,
+                     completion: @escaping (ArchiveInfo?, String?) -> Void) -> ListTask {
+        let task = ListTask()
         let folder = (archive as NSString).deletingLastPathComponent
         if Formats.isMultiVolume(archive) || !FileManager.default.isReadableFile(atPath: archive) {
-            guard FolderAccess.ensure(folder, write: false) else { return nil }
-        }
-        var wrong = false
-        while true {
-            switch RarRunner.list(archive, password: password) {
-            case .ok(var info):
-                if wrong { info.headersEncrypted = true }   // şifre olmadan listelenemedi
-                return info
-            case .wrongPassword:
-                guard let pw = Dialogs.askPassword(archiveName: name(archive), wrong: wrong) else { return nil }
-                password = pw
-                wrong = true
-            case .error(let r):
-                if r.notArchive {
-                    Dialogs.error(L("Arşiv açılamadı"), LF("\"%@\" desteklenen bir arşiv değil.", name(archive)))
-                } else {
-                    Dialogs.error(L("Arşiv açılamadı"), r.errorSummary, details: r.output)
-                }
-                return nil
+            guard FolderAccess.ensure(folder, write: false) else {
+                DispatchQueue.main.async { completion(nil, password) }
+                return task
             }
+        }
+        func attempt(_ pw: String?, wrong: Bool) {
+            let job = ListJob()
+            task.job = job
+            let closePanel = showPanel ? delayedListPanel(archive, host: host, onCancel: { task.cancel() }) : {}
+            job.start(archive, password: pw) { outcome in
+                closePanel()
+                guard let outcome, !task.cancelled else { completion(nil, pw); return }
+                switch outcome {
+                case .ok(var info):
+                    if wrong { info.headersEncrypted = true }   // şifre olmadan listelenemedi
+                    completion(info, pw)
+                case .wrongPassword:
+                    guard let p = Dialogs.askPassword(archiveName: name(archive), wrong: wrong) else { completion(nil, pw); return }
+                    attempt(p, wrong: true)
+                case .error(let r):
+                    if r.notArchive {
+                        Dialogs.error(L("Arşiv açılamadı"), LF("\"%@\" desteklenen bir arşiv değil.", name(archive)))
+                    } else {
+                        Dialogs.error(L("Arşiv açılamadı"), r.errorSummary, details: r.output)
+                    }
+                    completion(nil, pw)
+                }
+            }
+        }
+        attempt(password, wrong: false)
+        return task
+    }
+
+    /// Listeleme 0,5 sn'yi aşarsa iptal edilebilir bir ilerleme penceresi açar (kısa listelemelerde pencere yanıp sönmesin).
+    /// Dönen kapanış pencereyi kapatır.
+    private static func delayedListPanel(_ archive: String, host: NSWindow?, onCancel: @escaping () -> Void) -> () -> Void {
+        var panel: ProgressPanel?
+        var done = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard !done else { return }
+            let p = ProgressPanel(title: LF("Okunuyor: %@", name(archive)))
+            p.setActivity(L("Arşiv içeriği listeleniyor…"))
+            p.onCancel = onCancel
+            p.show(on: host)
+            panel = p
+        }
+        return {
+            done = true
+            panel?.onCancel = nil
+            panel?.dismiss()
+            panel = nil
         }
     }
 
@@ -202,60 +248,69 @@ enum Ops {
         var o = options
         if o.format.isRar, !RarTools.ensureAvailable() { completion(false, o.archivePath); return }
         guard FolderAccess.ensure((o.archivePath as NSString).deletingLastPathComponent, write: true) else { completion(false, o.archivePath); return }
-        if FileManager.default.fileExists(atPath: o.archivePath) {
-            let alert = NSAlert()
-            alert.messageText = LF("\"%@\" zaten var", name(o.archivePath))
-            if o.format.supportsAppend {
-                // Mevcut arşiv şifreli mi? (şifresiz listeleme denemesi)
-                var existingEncrypted = false
-                switch RarRunner.list(o.archivePath, password: nil) {
-                case .ok(let ex): existingEncrypted = ex.hasEncryptedFiles
-                case .wrongPassword: existingEncrypted = true
-                case .error: break
-                }
-                if existingEncrypted {
-                    alert.informativeText = L("Aynı adlı mevcut arşiv şifreli. Yeni, şifresiz bir arşiv oluşturulsun mu, yoksa dosyalar şifreli arşive mi eklensin?")
-                    alert.addButton(withTitle: L("Yeni Arşiv Oluştur"))
-                    alert.addButton(withTitle: L("Şifreli Arşive Ekle…"))
-                    alert.addButton(withTitle: L("İptal"))
-                    Dialogs.activate()
-                    switch alert.runModal() {
-                    case .alertFirstButtonReturn:
-                        o.archivePath = uniquePath(o.archivePath)
-                    case .alertSecondButtonReturn:
-                        var pw: String? = nil
-                        guard let existing = listInteractive(archive: o.archivePath, password: &pw) else { completion(false, o.archivePath); return }
-                        add(info: existing, items: items, password: pw, host: host) { ok, _ in completion(ok, o.archivePath) }
-                        return
-                    default:
-                        completion(false, o.archivePath); return
-                    }
-                } else {
-                    alert.informativeText = L("Yeni bir arşiv oluşturulsun mu, yoksa dosyalar mevcut arşive mi eklensin?")
-                    alert.addButton(withTitle: L("Yeni Arşiv Oluştur"))
-                    alert.addButton(withTitle: L("Mevcut Arşive Ekle"))
-                    alert.addButton(withTitle: L("İptal"))
-                    Dialogs.activate()
-                    switch alert.runModal() {
-                    case .alertFirstButtonReturn: o.archivePath = uniquePath(o.archivePath)
-                    case .alertSecondButtonReturn: break
-                    default: completion(false, o.archivePath); return
-                    }
-                }
-            } else {
-                alert.informativeText = L("Bu biçimde mevcut arşive ekleme yapılamaz. Yeni bir arşiv oluşturulsun mu?")
+        func start() {
+            let cwd = (o.archivePath as NSString).deletingLastPathComponent
+            let steps = o.buildSteps(items: items)
+            runSteps(steps, index: 0, archive: o.archivePath, cwd: cwd, host: host, completion: completion)
+        }
+        guard FileManager.default.fileExists(atPath: o.archivePath) else { start(); return }
+        let alert = NSAlert()
+        alert.messageText = LF("\"%@\" zaten var", name(o.archivePath))
+        guard o.format.supportsAppend else {
+            alert.informativeText = L("Bu biçimde mevcut arşive ekleme yapılamaz. Yeni bir arşiv oluşturulsun mu?")
+            alert.addButton(withTitle: L("Yeni Arşiv Oluştur"))
+            alert.addButton(withTitle: L("İptal"))
+            Dialogs.activate()
+            if alert.runModal() == .alertFirstButtonReturn { o.archivePath = uniquePath(o.archivePath); start() } else { completion(false, o.archivePath) }
+            return
+        }
+        // Mevcut arşiv şifreli mi? (şifresiz listeleme denemesi; büyük arşivde uzun sürebilir: arka planda, iptal edilebilir)
+        let probe = ListJob()
+        let closePanel = delayedListPanel(o.archivePath, host: host, onCancel: { probe.cancel() })
+        probe.start(o.archivePath, password: nil) { outcome in
+            closePanel()
+            guard let outcome else { completion(false, o.archivePath); return }   // iptal
+            var existingEncrypted = false
+            switch outcome {
+            case .ok(let ex): existingEncrypted = ex.hasEncryptedFiles
+            case .wrongPassword: existingEncrypted = true
+            case .error: break
+            }
+            if existingEncrypted {
+                alert.informativeText = L("Aynı adlı mevcut arşiv şifreli. Yeni, şifresiz bir arşiv oluşturulsun mu, yoksa dosyalar şifreli arşive mi eklensin?")
                 alert.addButton(withTitle: L("Yeni Arşiv Oluştur"))
+                alert.addButton(withTitle: L("Şifreli Arşive Ekle…"))
                 alert.addButton(withTitle: L("İptal"))
                 Dialogs.activate()
-                if alert.runModal() == .alertFirstButtonReturn { o.archivePath = uniquePath(o.archivePath) } else { completion(false, o.archivePath); return }
+                switch alert.runModal() {
+                case .alertFirstButtonReturn:
+                    o.archivePath = uniquePath(o.archivePath)
+                    start()
+                case .alertSecondButtonReturn:
+                    let path = o.archivePath
+                    list(archive: path, password: nil, showPanel: true, host: host) { existing, pw in
+                        guard let existing else { completion(false, path); return }
+                        add(info: existing, items: items, password: pw, host: host) { ok, _ in completion(ok, path) }
+                    }
+                default:
+                    completion(false, o.archivePath)
+                }
+            } else {
+                alert.informativeText = L("Yeni bir arşiv oluşturulsun mu, yoksa dosyalar mevcut arşive mi eklensin?")
+                alert.addButton(withTitle: L("Yeni Arşiv Oluştur"))
+                alert.addButton(withTitle: L("Mevcut Arşive Ekle"))
+                alert.addButton(withTitle: L("İptal"))
+                Dialogs.activate()
+                switch alert.runModal() {
+                case .alertFirstButtonReturn: o.archivePath = uniquePath(o.archivePath); start()
+                case .alertSecondButtonReturn: start()
+                default: completion(false, o.archivePath)
+                }
             }
         }
-        let cwd = (o.archivePath as NSString).deletingLastPathComponent
-        let steps = o.buildSteps(items: items)
-        runSteps(steps, index: 0, archive: o.archivePath, cwd: cwd, host: host, completion: completion)
     }
 
-    private static func runSteps(_ steps: [CompressOptions.Step], index: Int, archive: String, cwd: String,
+    private static func runSteps(_ steps: [CompressOptions.Step], index: Int, archive: String, cwd: String, warned: Bool = false,
                                  host: NSWindow?, completion: @escaping (Bool, String) -> Void) {
         guard index < steps.count else { completion(true, archive); return }
         let step = steps[index]
@@ -272,7 +327,26 @@ enum Ops {
                 completion(false, archive)
                 return
             }
-            runSteps(steps, index: index + 1, archive: archive, cwd: cwd, host: host, completion: completion)
+            let warned = warned || r.code != 0
+            if !step.deleteOnSuccess.isEmpty { deleteSources(step.deleteOnSuccess, warned: warned) }
+            runSteps(steps, index: index + 1, archive: archive, cwd: cwd, warned: warned, host: host, completion: completion)
+        }
+    }
+
+    /// Çok adımlı sıkıştırmada (tar.gz vb.) kaynakları yalnızca tüm adımlar bitince çöpe taşır.
+    /// Uyarı varsa (okunamayan dosya gibi) arşivde eksik olabilir: kaynaklara dokunulmaz.
+    private static func deleteSources(_ items: [String], warned: Bool) {
+        if warned {
+            Dialogs.info(L("Kaynak dosyalar silinmedi"), L("Sıkıştırma uyarılarla tamamlandığı için kaynak dosyalar yerinde bırakıldı."))
+            return
+        }
+        var failed: [String] = []
+        for item in items {
+            do { try FileManager.default.trashItem(at: URL(fileURLWithPath: item), resultingItemURL: nil) }
+            catch { failed.append(name(item)) }
+        }
+        if !failed.isEmpty {
+            Dialogs.error(L("Kaynak dosyalar silinemedi"), failed.prefix(8).joined(separator: "\n") + (failed.count > 8 ? "\n…" : ""))
         }
     }
 

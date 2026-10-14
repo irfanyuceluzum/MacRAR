@@ -25,6 +25,7 @@ enum L10n {
         "Üzerine Yaz": "Overwrite", "Yeniden Adlandır": "Rename",
         // İlerleme
         "Detayları Göster": "Show Details", "Detayları Gizle": "Hide Details", "Hazırlanıyor…": "Preparing…", "İptal ediliyor…": "Cancelling…",
+        "Yükleniyor…": "Loading…", "Okunuyor: %@": "Reading: %@", "Arşiv içeriği listeleniyor…": "Listing archive contents…", "geçen %@": "elapsed %@",
         "  •  kalan ~%@  •  geçen %@": "  •  remaining ~%@  •  elapsed %@", "  •  geçen %@": "  •  elapsed %@",
         "%%%d": "%d%%", "%d sn": "%ds", "%d dk %d sn": "%dm %ds", "%d sa %d dk": "%dh %dm",
         "Çıkartılıyor: %@": "Extracting: %@", "Test ediliyor: %@": "Testing: %@", "Ekleniyor: %@": "Adding: %@", "Siliniyor: %@": "Deleting: %@",
@@ -40,6 +41,9 @@ enum L10n {
         "Yeni bir arşiv oluşturulsun mu, yoksa dosyalar mevcut arşive mi eklensin?": "Create a new archive, or add the files to the existing one?",
         "Bu biçimde mevcut arşive ekleme yapılamaz. Yeni bir arşiv oluşturulsun mu?": "Files cannot be added to an existing archive of this format. Create a new archive?",
         "Sıkıştırma başarısız": "Compression failed", "Desteklenmiyor": "Not supported",
+        "Kaynak dosyalar silinmedi": "Source files were not deleted",
+        "Sıkıştırma uyarılarla tamamlandığı için kaynak dosyalar yerinde bırakıldı.": "Compression finished with warnings, so the source files were left in place.",
+        "Kaynak dosyalar silinemedi": "Could not delete the source files",
         "tar.gz / tar.xz türü arşivlere dosya eklenemez. Yeni bir arşiv oluşturun.": "Files cannot be added to tar.gz / tar.xz archives. Create a new archive instead.",
         "tar.gz / tar.xz türü arşivlerden dosya silinemez.": "Entries cannot be deleted from tar.gz / tar.xz archives.",
         "Ekleme başarısız": "Adding failed", "Silme başarısız": "Deletion failed",

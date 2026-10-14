@@ -182,33 +182,61 @@ enum RarRunner {
         runStages([(tool, args)], cwd: cwd)
     }
 
-    /// Birbirine borulanmış aşamaları eşzamanlı çalıştırır; son aşamanın çıktısı ve çıkış kodu döner.
-    static func runStages(_ stages: [Stage], cwd: String? = nil) -> RarResult {
-        var processes: [Process] = []
+    /// Boru hattını kurar: her aşamanın çıktısı bir sonrakinin girdisine bağlanır. Son aşamanın stdout/stderr'i
+    /// çağırana bırakılır; ara aşamaların stderr'i hata ayrıntısı için toplanır.
+    static func makePipeline(_ stages: [Stage], cwd: String?) -> [(process: Process, stderr: StderrSink?)] {
+        var out: [(process: Process, stderr: StderrSink?)] = []
         var prevOut: Pipe? = nil
         for (i, st) in stages.enumerated() {
             let p = makeProcess(st.tool, st.args, cwd: cwd)
-            if let prev = prevOut { p.standardInput = prev.fileHandleForReading }
+            // FileHandle değil Pipe verilir: Process başlatınca okuma ucunun bizdeki kopyasını kapatır. Yoksa sonraki aşama
+            // erken bitince (tar sonu işareti) önceki aşama SIGPIPE alamaz, boruya yazarken sonsuza dek bekler.
+            if let prev = prevOut { p.standardInput = prev }
+            var sink: StderrSink? = nil
             if i < stages.count - 1 {
-                let out = Pipe()
-                p.standardOutput = out
-                p.standardError = FileHandle.nullDevice
-                prevOut = out
+                let o = Pipe()
+                p.standardOutput = o
+                sink = StderrSink()
+                p.standardError = sink!.pipe
+                prevOut = o
             }
-            processes.append(p)
+            out.append((p, sink))
         }
-        guard let last = processes.last else { return RarResult(code: -1, output: "") }
+        return out
+    }
+
+    /// Tüm aşamaların sonucunu birleştirir: son aşamanın kodu esas alınır, ara aşamalardan biri daha kötü bir kodla
+    /// çıktıysa (örn. gzip CRC hatası → 2) o kod döner ve o aşamanın hata çıktısı ayrıntıya eklenir.
+    /// Sinyalle (SIGPIPE: okuyan erken bitti, SIGTERM: biz durdurduk) sonlanan ara aşamalar hata sayılmaz.
+    static func combinedResult(_ pipeline: [(process: Process, stderr: StderrSink?)], output: String, cancelled: Bool = false) -> RarResult {
+        guard let last = pipeline.last?.process else { return RarResult(code: -1, output: output, cancelled: cancelled) }
+        var code = last.terminationStatus
+        var out = output
+        for (p, sink) in pipeline.dropLast() where !p.isRunning && p.terminationReason == .exit && p.terminationStatus != 0 {
+            code = max(code, p.terminationStatus)
+            if let text = sink?.text, !text.isEmpty { out = text + (text.hasSuffix("\n") ? "" : "\n") + out }
+        }
+        return RarResult(code: code, output: out, cancelled: cancelled)
+    }
+
+    /// Birbirine borulanmış aşamaları eşzamanlı çalıştırır; tüm aşamaların çıkış kodları değerlendirilir.
+    /// onLaunch: süreçler başlatılınca çağrılır (başka bir iş parçacığından iptal edebilmek için)
+    static func runStages(_ stages: [Stage], cwd: String? = nil, onLaunch: (([Process]) -> Void)? = nil) -> RarResult {
+        let pipeline = makePipeline(stages, cwd: cwd)
+        guard let last = pipeline.last?.process else { return RarResult(code: -1, output: "") }
         let pipe = Pipe()
         last.standardOutput = pipe
         last.standardError = pipe
-        for p in processes {
+        for (p, _) in pipeline {
             do { try p.run() } catch {
                 return RarResult(code: -1, output: LF("Çalıştırılamadı: %@", error.localizedDescription))
             }
         }
+        onLaunch?(pipeline.map { $0.process })
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        processes.forEach { $0.waitUntilExit() }
-        return RarResult(code: last.terminationStatus, output: String(decoding: data, as: UTF8.self))
+        pipeline.forEach { $0.process.waitUntilExit() }
+        pipeline.forEach { $0.stderr?.finish() }
+        return combinedResult(pipeline, output: String(decoding: data, as: UTF8.self))
     }
 
     enum ListOutcome {
@@ -227,7 +255,11 @@ enum RarRunner {
     }
 
     static func list(_ path: String, password: String?) -> ListOutcome {
-        let r = runStages(listStages(path, password: password))
+        listOutcome(runStages(listStages(path, password: password)), path: path)
+    }
+
+    /// Listeleme çıktısını yorumlar (ayrıştırma büyük arşivlerde uzun sürer: ana iş parçacığında çağırmayın)
+    static func listOutcome(_ r: RarResult, path: String) -> ListOutcome {
         if r.wrongPassword { return .wrongPassword }
         if r.notArchive || (!r.ok && !r.output.contains("----------")) { return .error(r) }
         guard r.output.contains("----------") || r.output.contains("Type = ") else { return .error(r) }
@@ -341,23 +373,12 @@ final class RarJob {
         start(stages: [(tool, args)], cwd: cwd, completion: completion)
     }
 
-    /// Aşamalar birbirine borulanır; yalnızca son aşamanın çıktısı izlenir.
+    /// Aşamalar birbirine borulanır; yalnızca son aşamanın çıktısı izlenir, sonuçta tüm aşamaların çıkış kodu değerlendirilir.
     func start(stages: [Stage], cwd: String? = nil, completion: @escaping (RarResult) -> Void) {
         guard let lastStage = stages.last else { return }
         monitoredTool = lastStage.tool
-        var procs: [Process] = []
-        var prevOut: Pipe? = nil
-        for (i, st) in stages.enumerated() {
-            let p = RarRunner.makeProcess(st.tool, st.args, cwd: cwd)
-            if let prev = prevOut { p.standardInput = prev.fileHandleForReading }
-            if i < stages.count - 1 {
-                let out = Pipe()
-                p.standardOutput = out
-                p.standardError = FileHandle.nullDevice
-                prevOut = out
-            }
-            procs.append(p)
-        }
+        let pipeline = RarRunner.makePipeline(stages, cwd: cwd)
+        let procs = pipeline.map { $0.process }
         let last = procs[procs.count - 1]
         let pipe = Pipe()
         last.standardOutput = pipe
@@ -375,8 +396,19 @@ final class RarJob {
             self.queue.async {
                 self.consume(rest)
                 self.flushPartial()
-                for p in self.processes where p !== proc && p.isRunning { p.terminate() }
-                let result = RarResult(code: proc.terminationStatus, output: self.output, cancelled: self.cancelled)
+                let others = self.processes.filter { $0 !== proc }
+                if self.cancelled || proc.terminationStatus != 0 {
+                    // Son aşama hatalı bitti: önceki aşamalar boruya yazarken takılmasın
+                    others.forEach { if $0.isRunning { $0.terminate() } }
+                } else {
+                    // Başarılı bitti: önceki aşamaların kendi çıkış kodunu (örn. gzip CRC hatası) bekle
+                    let deadline = Date().addingTimeInterval(5)
+                    while others.contains(where: { $0.isRunning }), Date() < deadline { usleep(20_000) }
+                    others.forEach { if $0.isRunning { $0.terminate() } }
+                }
+                others.forEach { $0.waitUntilExit() }
+                pipeline.forEach { $0.stderr?.finish() }
+                let result = RarRunner.combinedResult(pipeline, output: self.output, cancelled: self.cancelled)
                 DispatchQueue.main.async { completion(result) }
             }
         }
@@ -487,7 +519,78 @@ final class RarJob {
     }
 }
 
+// MARK: - Arka planda listeleme
+
+/// Listelemeyi arka planda çalıştırır; iptal edilebilir. tar.gz / tar.xz gibi arşivlerde bütün akış açıldığından
+/// listeleme dakikalar sürebilir: ana iş parçacığı beklemez.
+final class ListJob {
+    private let lock = NSLock()
+    private var processes: [Process] = []
+    private var cancelledFlag = false
+    var cancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelledFlag }
+
+    /// Süren listelemeler: uygulama kapanırken 7zz süreçleri arkada (dakikalarca) çalışmaya devam etmesin
+    private static var active: [ObjectIdentifier: ListJob] = [:]
+    private static let activeLock = NSLock()
+    static func cancelAll() {
+        activeLock.lock(); let jobs = Array(active.values); activeLock.unlock()
+        jobs.forEach { $0.cancel() }
+    }
+
+    /// completion ana kuyrukta çağrılır; iptal edildiyse nil
+    func start(_ path: String, password: String?, completion: @escaping (RarRunner.ListOutcome?) -> Void) {
+        Self.activeLock.lock(); Self.active[ObjectIdentifier(self)] = self; Self.activeLock.unlock()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let r = RarRunner.runStages(RarRunner.listStages(path, password: password)) { self.adopt($0) }
+            // İptal edildiyse yarım çıktıyı boşuna ayrıştırma
+            let outcome = self.cancelled ? nil : RarRunner.listOutcome(r, path: path)
+            Self.activeLock.lock(); Self.active[ObjectIdentifier(self)] = nil; Self.activeLock.unlock()
+            DispatchQueue.main.async { completion(self.cancelled ? nil : outcome) }
+        }
+    }
+
+    func cancel() {
+        lock.lock(); cancelledFlag = true; let procs = processes; lock.unlock()
+        procs.forEach { if $0.isRunning { $0.terminate() } }
+    }
+
+    /// Süreçler başlatıldı; bu arada iptal istendiyse hemen durdur
+    private func adopt(_ procs: [Process]) {
+        lock.lock(); processes = procs; let c = cancelledFlag; lock.unlock()
+        if c { procs.forEach { if $0.isRunning { $0.terminate() } } }
+    }
+}
+
 // MARK: - Yardımcılar
+
+/// Boru hattındaki ara bir aşamanın stderr çıktısını arka planda toplar (dolup aşamayı bekletmesin diye)
+final class StderrSink {
+    let pipe = Pipe()
+    private var data = Data()
+    private let lock = NSLock()
+
+    init() {
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] h in
+            let d = h.availableData
+            guard let self else { return }
+            if d.isEmpty { h.readabilityHandler = nil; return }
+            self.lock.lock(); self.data.append(d); self.lock.unlock()
+        }
+    }
+
+    /// Süreç bittikten sonra çağrılır: kalan veriyi okur
+    func finish() {
+        let h = pipe.fileHandleForReading
+        h.readabilityHandler = nil
+        let rest = h.readDataToEndOfFile()
+        lock.lock(); data.append(rest); lock.unlock()
+    }
+
+    var text: String {
+        lock.lock(); defer { lock.unlock() }
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
 
 /// Oturum boyunca oluşturulan geçici klasörler; çıkışta temizlenir
 enum TempDirs {

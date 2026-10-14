@@ -44,17 +44,26 @@ final class Node: NSObject {
         self.name = name; self.path = path; self.isDir = isDir
     }
 
-    var totalSize: Int64 {
-        if !isDir { return entry?.size ?? 0 }
-        return children.reduce(0) { $0 + $1.totalSize }
-    }
-    var totalPacked: Int64 {
-        if !isDir { return entry?.packedSize ?? 0 }
-        return children.reduce(0) { $0 + $1.totalPacked }
-    }
-    var containsEncrypted: Bool {
-        if !isDir { return entry?.encrypted ?? false }
-        return children.contains { $0.containsEncrypted }
+    // Klasör toplamları buildTree sonunda bir kez hesaplanır (hücre çiziminde ve sıralamada her seferinde
+    // alt ağacı dolaşmamak için)
+    private(set) var totalSize: Int64 = 0
+    private(set) var totalPacked: Int64 = 0
+    private(set) var containsEncrypted = false
+
+    /// Toplamları alttan yukarı hesaplar
+    func computeTotals() {
+        guard isDir else {
+            totalSize = entry?.size ?? 0
+            totalPacked = entry?.packedSize ?? 0
+            containsEncrypted = entry?.encrypted ?? false
+            return
+        }
+        var size: Int64 = 0, packed: Int64 = 0, enc = false
+        for c in children {
+            c.computeTotals()
+            size += c.totalSize; packed += c.totalPacked; enc = enc || c.containsEncrypted
+        }
+        totalSize = size; totalPacked = packed; containsEncrypted = enc
     }
 
     func sortRecursively(key: String = "name", ascending: Bool = true) {
@@ -81,7 +90,8 @@ final class Node: NSObject {
         return ascending ? r == .orderedAscending : r == .orderedDescending
     }
 
-    static func buildTree(_ entries: [ArchiveEntry]) -> Node {
+    /// Ana iş parçacığı dışında da çağrılabilir (oluşan ağaç henüz paylaşılmamışken)
+    static func buildTree(_ entries: [ArchiveEntry], key: String = "name", ascending: Bool = true) -> Node {
         let root = Node(name: "", path: "", isDir: true)
         var map: [String: Node] = ["": root]
         func ensure(_ path: String) -> Node {
@@ -107,7 +117,8 @@ final class Node: NSObject {
                 map[clean] = n
             }
         }
-        root.sortRecursively()
+        root.computeTotals()
+        root.sortRecursively(key: key, ascending: ascending)
         return root
     }
 
@@ -137,12 +148,22 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var sortKey = "name"
     private var sortAscending = true
     private var previewURLs: [URL] = []
+    /// Hızlı Bakış isteklerinin nesli: yalnızca en son isteğin çıkartması önizlemeye yazılır
+    private var quickLookGeneration = 0
+    // Arka planda listeleme: "Yükleniyor…" katmanı ve iptal
+    private let loadingView = NSBox()
+    private let loadingDetail = NSTextField(labelWithString: "")
+    private let loadingSpinner = NSProgressIndicator()
+    private var loadTask: Ops.ListTask?
+    private var loadGeneration = 0
+    private var isLoading: Bool { loadTask != nil }
     private let promiseQueue: OperationQueue = {
         let q = OperationQueue(); q.maxConcurrentOperationCount = 1; return q
     }()
     // Finder'a sürükleme oturumu (soru bir kez sorulur, öğeler tek seferde çıkartılır)
     private var dragNodes: [Node] = []
     private var dragDecision: Bool? = nil
+    private var dragOverwrite: Dialogs.OverwriteMode? = nil   // hedefte aynı adlı öğe varsa ne yapılacağı
     private var dragTempDir: String? = nil
     private var dragExtracted = false
     private var dragExtractOK = false
@@ -244,6 +265,34 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
             emptyLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
         ])
 
+        // Yükleniyor katmanı: listeyi örter (tıklamalar alttaki listeye geçmez)
+        loadingView.boxType = .custom
+        loadingView.borderWidth = 0
+        loadingView.fillColor = .windowBackgroundColor
+        loadingView.contentViewMargins = .zero
+        loadingView.translatesAutoresizingMaskIntoConstraints = false
+        loadingView.isHidden = true
+        loadingSpinner.style = .spinning
+        loadingSpinner.controlSize = .regular
+        let loadingTitle = NSTextField(labelWithString: L("Yükleniyor…"))
+        loadingTitle.font = .boldSystemFont(ofSize: 14)
+        loadingDetail.font = .systemFont(ofSize: 12)
+        loadingDetail.textColor = .secondaryLabelColor
+        loadingDetail.lineBreakMode = .byTruncatingMiddle
+        let cancelLoad = NSButton(title: L("İptal"), target: self, action: #selector(cancelLoading(_:)))
+        cancelLoad.bezelStyle = .rounded
+        cancelLoad.keyEquivalent = "\u{1b}"
+        let loadingStack = NSStackView(views: [loadingSpinner, loadingTitle, loadingDetail, cancelLoad])
+        loadingStack.orientation = .vertical; loadingStack.alignment = .centerX; loadingStack.spacing = 10
+        loadingStack.setCustomSpacing(18, after: loadingDetail)
+        loadingStack.translatesAutoresizingMaskIntoConstraints = false
+        loadingView.contentView?.addSubview(loadingStack)
+        NSLayoutConstraint.activate([
+            loadingStack.centerXAnchor.constraint(equalTo: loadingView.centerXAnchor),
+            loadingStack.centerYAnchor.constraint(equalTo: loadingView.centerYAnchor),
+            loadingDetail.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
+        ])
+
         let statusBar = NSVisualEffectView()
         statusBar.material = .titlebar
         statusBar.blendingMode = .withinWindow
@@ -253,7 +302,12 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
         content.addSubview(scroll)
         content.addSubview(statusBar)
         content.addSubview(emptyView)
+        content.addSubview(loadingView)
         NSLayoutConstraint.activate([
+            loadingView.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
+            loadingView.trailingAnchor.constraint(equalTo: scroll.trailingAnchor),
+            loadingView.topAnchor.constraint(equalTo: scroll.topAnchor),
+            loadingView.bottomAnchor.constraint(equalTo: scroll.bottomAnchor),
             scroll.topAnchor.constraint(equalTo: content.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -312,23 +366,69 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: Arşiv yükleme
 
-    func open(_ path: String) {
+    /// completion(açıldı mı): listeleme arka planda bittiğinde (iptal / hata → false)
+    func open(_ path: String, completion: ((Bool) -> Void)? = nil) {
         archivePath = path
         password = nil
-        reload()
+        reload(completion: completion)
     }
 
-    private func reload() {
-        guard let path = archivePath else { return }
-        guard let info = Ops.listInteractive(archive: path, password: &password) else {
-            // açılamadı: pencereyi boş bırak
-            if self.info == nil { archivePath = nil }
-            updateStatus()
-            return
+    /// Arşivi arka planda listeler; bu sırada pencerede "Yükleniyor…" katmanı ve iptal düğmesi görünür.
+    /// Şifre sorusu ana iş parçacığında kalır. Yenilemede eski içerik iptal edilene / yenisi gelene dek korunur.
+    private func reload(completion: ((Bool) -> Void)? = nil) {
+        guard let path = archivePath else { completion?(false); return }
+        loadTask?.cancel()
+        loadGeneration += 1
+        let gen = loadGeneration
+        loadTask = Ops.list(archive: path, password: password) { [weak self] info, pw in
+            guard let self, gen == self.loadGeneration else { return }   // yerine yenisi başladı / pencere kapandı
+            self.password = pw
+            guard let info else {
+                // açılamadı ya da iptal edildi: ilk açılışsa pencereyi boş bırak
+                if self.info == nil { self.archivePath = nil }
+                self.setLoading(false)
+                completion?(false)
+                return
+            }
+            // Ağacı kurmak da yüz binlerce öğede zaman alır: arka planda
+            let key = self.sortKey, ascending = self.sortAscending
+            DispatchQueue.global(qos: .userInitiated).async {
+                let root = Node.buildTree(info.entries, key: key, ascending: ascending)
+                DispatchQueue.main.async {
+                    guard gen == self.loadGeneration else { return }
+                    if self.sortKey != key || self.sortAscending != ascending {   // bu arada sıralama değişti
+                        root.sortRecursively(key: self.sortKey, ascending: self.sortAscending)
+                    }
+                    self.show(info, root: root, path: path)
+                    self.setLoading(false)
+                    completion?(true)
+                }
+            }
         }
+        setLoading(true, path: path)   // loadTask atandıktan sonra (completion her zaman asenkron gelir)
+    }
+
+    private func setLoading(_ on: Bool, path: String? = nil) {
+        if !on { loadTask = nil }
+        loadingView.isHidden = !on
+        // Klavye de alttaki listeye gitmesin (Return / boşluk eski içerikte işlem başlatmasın)
+        window?.makeFirstResponder(on ? nil : outline)
+        if on {
+            loadingDetail.stringValue = (path.map { ($0 as NSString).lastPathComponent }) ?? ""
+            loadingSpinner.startAnimation(nil)
+        } else {
+            loadingSpinner.stopAnimation(nil)
+        }
+        updateStatus()
+        // Sonuç olaysız (arka plandan) gelir: araç çubuğu bir sonraki olayı beklemeden güncellensin
+        window?.toolbar?.validateVisibleItems()
+    }
+
+    @objc func cancelLoading(_ sender: Any?) { loadTask?.cancel() }
+
+    private func show(_ info: ArchiveInfo, root: Node, path: String) {
         self.info = info
-        root = Node.buildTree(info.entries)
-        root.sortRecursively(key: sortKey, ascending: sortAscending)
+        self.root = root
         applyFilter()
         window?.title = (path as NSString).lastPathComponent
         window?.subtitle = AppInfo.abbreviate((path as NSString).deletingLastPathComponent)
@@ -387,7 +487,11 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func updateStatus() {
-        emptyView.isHidden = info != nil
+        emptyView.isHidden = info != nil || isLoading
+        if isLoading {
+            statusLabel.stringValue = L("Yükleniyor…")
+            return
+        }
         guard let info else {
             statusLabel.stringValue = L("Arşiv açık değil")
             return
@@ -572,14 +676,17 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func prepareQuickLook(completion: @escaping () -> Void) {
-        guard let info else { return }
+        guard let info, !isLoading else { return }
         let files = selectedNodes().filter { !$0.isDir }
         guard !files.isEmpty else { return }
+        quickLookGeneration += 1
+        let gen = quickLookGeneration
         let tmp = TempDirs.make("ql")
         Ops.extract(info: info, names: files.map { $0.path }, dest: tmp, password: password, host: window, quiet: true) { [weak self] ok, pw in
             guard let self else { return }
             self.password = pw ?? self.password
-            guard ok else { return }
+            // Bu arada seçim değiştiyse geç biten eski çıkartma yeni önizlemeyi ezmesin
+            guard ok, gen == self.quickLookGeneration else { try? FileManager.default.removeItem(atPath: tmp); return }
             self.previewURLs = files.map { URL(fileURLWithPath: (tmp as NSString).appendingPathComponent($0.path)) }
             completion()
         }
@@ -609,6 +716,8 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
         switch action {
         case #selector(openArchive), #selector(newArchive):
             return true
+        case _ where isLoading:
+            return false   // listeleme sürerken arşiv eylemleri kapalı
         case #selector(extractHere), #selector(extractToFolder), #selector(extractTo), #selector(testArchive), #selector(showInfo):
             return info != nil
         case #selector(addFiles):
@@ -629,6 +738,11 @@ final class ArchiveWindowController: NSWindowController, NSWindowDelegate, NSMen
     // MARK: NSWindowDelegate
 
     func windowWillClose(_ notification: Notification) {
+        // Süren listelemeyi durdur; sonucu artık işlenmesin
+        loadTask?.cancel()
+        loadTask = nil
+        loadGeneration += 1
+        quickLookGeneration += 1
         AppDelegate.shared.windowClosed(self)
     }
 }
@@ -767,7 +881,13 @@ extension ArchiveWindowController: NSOutlineViewDataSource, NSOutlineViewDelegat
     func outlineViewSelectionDidChange(_ notification: Notification) {
         updateStatus()
         if let panel = QLPreviewPanel.shared(), panel.isVisible, panel.dataSource === self {
-            prepareQuickLook { panel.reloadData() }
+            // Ok tuşu basılı tutulunca her satır için çıkartma başlamasın: seçim kısa süre durunca hazırla
+            quickLookGeneration += 1
+            let gen = quickLookGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self, gen == self.quickLookGeneration, panel.isVisible, panel.dataSource === self else { return }
+                self.prepareQuickLook { panel.reloadData() }
+            }
         }
     }
 
@@ -814,6 +934,7 @@ extension ArchiveWindowController: NSOutlineViewDataSource, NSOutlineViewDelegat
     func outlineView(_ outlineView: NSOutlineView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forItems draggedItems: [Any]) {
         dragNodes = draggedItems.compactMap { $0 as? Node }
         dragDecision = nil
+        dragOverwrite = nil
         dragTempDir = nil
         dragExtracted = false
         dragExtractOK = false
@@ -857,12 +978,27 @@ extension ArchiveWindowController: NSFilePromiseProviderDelegate {
             }
             guard dragDecision == true else { error = CocoaError(.userCancelled); sem.signal(); return }
 
+            // Hedefte aynı adlı öğeler: oturum başına bir kez sor (çıkartmadaki gibi üzerine yaz / yeniden adlandır / atla)
+            if dragOverwrite == nil {
+                let existing = nodes.map { $0.name }.filter { FileManager.default.fileExists(atPath: destFolder.appendingPathComponent($0).path) }
+                dragOverwrite = existing.isEmpty ? .overwrite : Dialogs.askOverwrite(existing: existing, dest: destFolder.path)
+                if dragOverwrite == .cancel { dragDecision = false }
+            }
+            guard dragOverwrite != .cancel else { error = CocoaError(.userCancelled); sem.signal(); return }
+
             func moveIntoPlace() {
                 guard let tmp = dragTempDir else { error = CocoaError(.fileNoSuchFile); sem.signal(); return }
                 do {
                     let src = URL(fileURLWithPath: (tmp as NSString).appendingPathComponent(node.path))
-                    if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
-                    try FileManager.default.moveItem(at: src, to: url)
+                    var target = url
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        switch dragOverwrite {
+                        case .skip: sem.signal(); return
+                        case .rename: target = URL(fileURLWithPath: uniquePath(url.path))
+                        default: try FileManager.default.trashItem(at: url, resultingItemURL: nil)   // eskisi kalıcı silinmez, çöpe gider
+                        }
+                    }
+                    try FileManager.default.moveItem(at: src, to: target)
                 } catch let e { error = e }
                 sem.signal()
             }
