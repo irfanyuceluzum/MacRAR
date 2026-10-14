@@ -539,6 +539,7 @@ struct CompressOptions {
     var volumeSize: String? = nil      // "100M" gibi
     var sfx: Bool = false
     var deleteAfter: Bool = false
+    var excludeMacFiles: Bool = false  // .DS_Store ve __MACOSX dışarıda (rar aracında desteklenmez)
 
     struct Step {
         let title: String
@@ -559,6 +560,10 @@ struct CompressOptions {
         return a
     }
 
+    /// Mac'e özgü öğeleri dışlayan 7zz anahtarları (-spd altında da çalışır; "._*" jokeri çalışmadığı için yok)
+    static let macExcludeArgs = ["-xr!.DS_Store", "-xr!__MACOSX"]
+    private var macExcludes: [String] { excludeMacFiles ? CompressOptions.macExcludeArgs : [] }
+
     func buildSteps(items: [String]) -> [Step] {
         switch format {
         case .rar5:
@@ -577,16 +582,16 @@ struct CompressOptions {
                 a.append("-p" + pw)
                 if encryptNames { a.append("-mhe=on") }
             }
-            return [Step(title: L("Sıkıştırılıyor"), tool: .sevenZip, args: a + ["--", archivePath] + items)]
+            return [Step(title: L("Sıkıştırılıyor"), tool: .sevenZip, args: a + macExcludes + ["--", archivePath] + items)]
 
         case .zip:
             var a = sevenZipCommon + ["-tzip", "-mx=\(mx)"]
             if let pw = password, !pw.isEmpty { a += ["-p" + pw, "-mem=AES256"] }
-            return [Step(title: L("Sıkıştırılıyor"), tool: .sevenZip, args: a + ["--", archivePath] + items)]
+            return [Step(title: L("Sıkıştırılıyor"), tool: .sevenZip, args: a + macExcludes + ["--", archivePath] + items)]
 
         case .tar:
             let a = sevenZipCommon + ["-ttar"]
-            return [Step(title: L("Paketleniyor"), tool: .sevenZip, args: a + ["--", archivePath] + items)]
+            return [Step(title: L("Paketleniyor"), tool: .sevenZip, args: a + macExcludes + ["--", archivePath] + items)]
 
         case .tgz, .txz, .tbz2:
             let outer: String = format == .tgz ? "gzip" : (format == .txz ? "xz" : "bzip2")
@@ -601,7 +606,7 @@ struct CompressOptions {
             let step1 = ["a", "-y", "-bsp1", "-bb1", "-ttar"]
             let step2 = ["a", "-y", "-bsp1", "-bb1", "-t\(outer)", "-mx=\(mx)", "--", archivePath, tmpTar]
             return [
-                Step(title: L("Paketleniyor"), tool: .sevenZip, args: step1 + ["--", tmpTar] + items),
+                Step(title: L("Paketleniyor"), tool: .sevenZip, args: step1 + macExcludes + ["--", tmpTar] + items),
                 Step(title: L("Sıkıştırılıyor"), tool: .sevenZip, args: step2, cleanup: { try? FileManager.default.removeItem(atPath: tmpDir) },
                      deleteOnSuccess: deleteAfter ? items : []),
             ]
@@ -615,6 +620,7 @@ struct CompressOptions {
         o.level = Prefs.defaultLevel
         o.solid = Prefs.solid && o.format.supportsSolid
         o.recoveryRecord = Prefs.recoveryRecord && o.format.supportsRecovery
+        o.excludeMacFiles = Prefs.excludeMacFiles
         return o
     }
 
@@ -642,6 +648,7 @@ final class CompressDialog: NSWindowController, NSTextFieldDelegate {
     private let encryptNamesBox = NSButton(checkboxWithTitle: L("Dosya adlarını da şifrele"), target: nil, action: nil)
     private let solidBox = NSButton(checkboxWithTitle: L("Katı (solid) arşiv"), target: nil, action: nil)
     private let rrBox = NSButton(checkboxWithTitle: L("Kurtarma kaydı ekle (%3)"), target: nil, action: nil)
+    private let macBox = NSButton(checkboxWithTitle: L("Mac'e özgü dosyaları (.DS_Store, __MACOSX) arşive ekleme"), target: nil, action: nil)
     private let sfxBox = NSButton(checkboxWithTitle: L("Kendiliğinden açılan (SFX) arşiv"), target: nil, action: nil)
     private let deleteBox = NSButton(checkboxWithTitle: L("Sıkıştırdıktan sonra kaynak dosyaları sil"), target: nil, action: nil)
     private let volumeField = NSTextField()
@@ -692,6 +699,7 @@ final class CompressDialog: NSWindowController, NSTextFieldDelegate {
         solidBox.state = options.solid ? .on : .off
         rrBox.state = options.recoveryRecord ? .on : .off
         sfxBox.state = options.sfx ? .on : .off
+        macBox.state = options.excludeMacFiles ? .on : .off
         deleteBox.state = options.deleteAfter ? .on : .off
         hintLabel.font = .systemFont(ofSize: 10)
         hintLabel.textColor = .secondaryLabelColor
@@ -725,6 +733,7 @@ final class CompressDialog: NSWindowController, NSTextFieldDelegate {
             [NSGridCell.emptyContentView, rrBox],
             [NSGridCell.emptyContentView, sfxBox],
             [NSGridCell.emptyContentView, deleteBox],
+            [NSGridCell.emptyContentView, macBox],
         ])
         grid.rowSpacing = 8
         grid.columnSpacing = 10
@@ -780,6 +789,7 @@ final class CompressDialog: NSWindowController, NSTextFieldDelegate {
         solidBox.isEnabled = f.supportsSolid
         rrBox.isEnabled = f.supportsRecovery
         sfxBox.isEnabled = f.supportsSFX
+        macBox.isEnabled = !f.isRar
         volumeField.isEnabled = f.supportsVolumes
         switch f {
         case .rar5: hintLabel.stringValue = RarTools.available ? L("En iyi sıkıştırma ve kurtarma kaydı; WinRAR 5+ ile açılır.") : L("RARLAB'ın RAR aracını gerektirir; Oluştur'a basınca indirme adımları gösterilir.")
@@ -818,6 +828,7 @@ final class CompressDialog: NSWindowController, NSTextFieldDelegate {
         o.recoveryRecord = f.supportsRecovery && rrBox.state == .on
         o.sfx = f.supportsSFX && sfxBox.state == .on
         o.deleteAfter = deleteBox.state == .on
+        o.excludeMacFiles = !f.isRar && macBox.state == .on
         let v = volumeField.stringValue.trimmingCharacters(in: .whitespaces)
         o.volumeSize = (f.supportsVolumes && !v.isEmpty) ? v : nil
         // Son kullanılan ayarları hatırla
@@ -825,6 +836,8 @@ final class CompressDialog: NSWindowController, NSTextFieldDelegate {
         Prefs.defaultLevel = o.level
         Prefs.solid = o.solid
         Prefs.recoveryRecord = o.recoveryRecord
+        // RAR'da kutu devre dışı: tercih o seçimle ezilmesin
+        if !f.isRar { Prefs.excludeMacFiles = o.excludeMacFiles }
         result = o
         NSApp.stopModal(withCode: .OK)
     }

@@ -62,6 +62,7 @@ The whole app is a few thousand lines of Swift, needs no Xcode project (Command 
 **Creating archives**
 - Formats: 7z, ZIP, TAR, TAR.GZ, TAR.XZ, TAR.BZ2 out of the box; RAR 5 once you point the app at your own copy of RARLAB's "RAR for macOS" (Settings → *Install RAR Tool…*, or just pick RAR when creating an archive and follow the steps).
 - Six compression levels, password (optional file-name encryption for RAR and 7z, AES-256 for 7z and ZIP), solid archives, recovery record (RAR), split volumes, SFX (RAR), delete sources after archiving.
+- Mac-specific `.DS_Store` files and `__MACOSX` folders are left out of new and extended archives (on by default; Settings or the Create Archive window). Not applied to RAR, because the RAR tool does not support it yet.
 - Options the chosen format cannot support are disabled automatically.
 - Add files to an existing RAR/7z/ZIP/TAR archive (drag files onto the window or use ⇧⌘A) and delete entries from it (⌘⌫).
 

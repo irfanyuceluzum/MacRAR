@@ -5,6 +5,7 @@ private let items = ["/in/f1.txt", "/in/dir"]
 private func opts(_ format: ArchiveFormat, path: String? = nil, _ configure: (inout CompressOptions) -> Void = { _ in }) -> CompressOptions {
     var o = CompressOptions(archivePath: path ?? "/out/a." + format.ext)
     o.format = format
+    o.excludeMacFiles = false
     configure(&o)
     return o
 }
@@ -122,6 +123,29 @@ func runCompressTests() {
         let idx = withPw.firstIndex(of: "-ppw") ?? Int.max
         let sep = withPw.firstIndex(of: "--") ?? -1
         expect(idx < sep, "-p, -- ayracından önce olmalı")
+    }
+
+    test("buildSteps: Mac dosyalarını dışlama (7z/zip/tar/tar.gz) ve rar5'te yok") {
+        let ex = ["-xr!.DS_Store", "-xr!__MACOSX"]
+        for fmt in [ArchiveFormat.sevenZip, .zip, .tar] {
+            let on = opts(fmt) { $0.excludeMacFiles = true }.buildSteps(items: items)[0].args
+            let off = opts(fmt).buildSteps(items: items)[0].args
+            expect(ex.allSatisfy { on.contains($0) }, "\(fmt.ext) anahtarlar")
+            expectEqual(on.filter { !ex.contains($0) }, off, "\(fmt.ext) kapalıyla aynı kalan argümanlar")
+            let sep = on.firstIndex(of: "--") ?? -1
+            expect(ex.allSatisfy { (on.firstIndex(of: $0) ?? Int.max) < sep }, "\(fmt.ext) -- öncesi")
+        }
+        let tgz = opts(.tgz, path: "/out/a.tar.gz") { $0.excludeMacFiles = true }.buildSteps(items: items)
+        let s1 = tgz[0].args
+        expect(ex.allSatisfy { s1.contains($0) }, "tar.gz 1. adım")
+        expect(ex.allSatisfy { (s1.firstIndex(of: $0) ?? Int.max) < (s1.firstIndex(of: "--") ?? -1) }, "tar.gz -- öncesi")
+        expect(!tgz[1].args.contains { ex.contains($0) }, "tar.gz 2. adımda yok")
+        tgz[1].cleanup?()
+        let rar = opts(.rar5) { $0.excludeMacFiles = true }.buildSteps(items: items)[0].args
+        expectEqual(rar, ["a", "-ep1", "-r", "-y", "-m3", "-ma5", "--", "/out/a.rar", "/in/f1.txt", "/in/dir"])
+        // -spd kalıp jokerlerini kapattığı için "._*" eklenmez
+        expect(!CompressOptions.macExcludeArgs.contains { $0.contains("*") })
+        TempDirs.cleanupAll()
     }
 
     test("CompressOptions.defaultArchivePath") {

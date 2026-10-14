@@ -159,6 +159,7 @@ enum L10n {
         "Parçalara böl:": "Split volumes:", "Seçenekler:": "Options:",
         "Dosya adlarını da şifrele": "Also encrypt file names", "Katı (solid) arşiv": "Solid archive", "Kurtarma kaydı ekle (%3)": "Add recovery record (3%)",
         "Kendiliğinden açılan (SFX) arşiv": "Self-extracting (SFX) archive", "Sıkıştırdıktan sonra kaynak dosyaları sil": "Delete source files after archiving",
+        "Mac'e özgü dosyaları (.DS_Store, __MACOSX) arşive ekleme": "Do not add Mac-specific files (.DS_Store, __MACOSX) to archives",
         "Oluştur": "Create", "Arşivi Kaydet": "Save Archive", "Şifreler eşleşmiyor": "Passwords do not match", "Her iki şifre alanına aynı şifreyi girin.": "Enter the same password in both fields.",
         "En iyi sıkıştırma ve kurtarma kaydı; WinRAR 5+ ile açılır.": "Best compression and recovery record; opens with WinRAR 5+.",
         "Ücretsiz, yüksek sıkıştırma; AES-256 şifre ve ad şifreleme destekler.": "Free, high compression; supports AES-256 passwords and name encryption.",

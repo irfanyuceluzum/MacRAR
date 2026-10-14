@@ -48,6 +48,7 @@ Okuma, çıkartma ve test (RAR dahil, 7-Zip'in unRAR kodu ile) paketlenmiş `7zz
 - **Şifreli arşivler:** İçeriği şifreli ve dosya adları şifreli arşivler desteklenir. Şifre gerektiğinde sorulur, yanlışsa tekrar sorulur.
 - **Çıkartma:** Buraya çıkart (⌘E), arşiv adıyla klasöre çıkart (⌥⌘E), şuraya çıkart… (⇧⌘E), yalnızca seçilenleri çıkart. Hedefte aynı adlı dosya varsa üzerine yaz / yeniden adlandır / iptal sorulur.
 - **Sıkıştırma:** Biçim seçimi (7z/ZIP/TAR/TAR.GZ/TAR.XZ/TAR.BZ2; RARLAB'ın “RAR for macOS” aracını gösterirseniz RAR 5), 6 sıkıştırma düzeyi, şifre (isteğe bağlı dosya adlarını da şifreleme), katı arşiv, kurtarma kaydı, parçalara bölme, SFX, kaynakları silme. Biçimin desteklemediği seçenekler otomatik kapanır.
+- **Mac'e özgü dosyalar:** `.DS_Store` dosyaları ve `__MACOSX` klasörleri yeni ve genişletilen arşivlere eklenmez (varsayılan açık; Ayarlar'dan ya da Arşiv Oluştur penceresinden kapatılır). RAR aracı bunu henüz desteklemediği için RAR'da uygulanmaz.
 - **Finder'a sürükleyerek çıkartma:** Arşiv penceresindeki öğeleri bir Finder klasörüne veya masaüstüne bırakın; MacRAR bir kez sorar, onaylarsanız öğeleri ilerleme penceresiyle oraya çıkartır.
 - **İlerleme penceresi:** Toplam yüzde, tahmini kalan süre, geçen süre, işlenen dosya ve "Detayları Göster" ile açılan dosya listesi.
 - **Çok parçalı arşivler:** `.part01.rar … .partNN.rar` ve `.7z.001 … .NNN` setleri tanınır; Finder'da tüm parçaları seçseniz bile set bir kez, ilk parçadan başlayarak işlenir.

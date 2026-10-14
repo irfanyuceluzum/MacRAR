@@ -400,6 +400,7 @@ enum Ops {
         case .other:
             var args = ["a", "-y", "-bsp1", "-bb1", RarRunner.passwordArg7z(pw)]
             if info.headersEncrypted { args.append("-mhe=on") }
+            if Prefs.excludeMacFiles { args += CompressOptions.macExcludeArgs }
             stages = [(.sevenZip, args + ["--", info.path] + items)]
         }
         runJob(title: LF("Ekleniyor: %@", name(info.path)), stages: stages, host: host, totalFiles: nil) { r in
