@@ -74,6 +74,11 @@ if [[ $VARIANT == appstore ]]; then
       -c "Set :NSHumanReadableCopyright © 2026 Mesut Çevik" \
       -c "Set :CFBundleDocumentTypes:0:LSHandlerRank Default" "$APP/Contents/Info.plist"
   $PB -c "Merge AppStoreServices.plist" "$APP/Contents/Info.plist"
+elif [[ -n "$MACRAR_UPDATE_REPO" ]]; then
+  # Güncellemeler başka bir GitHub deposundan (ör. bir fork) denetlensin:  MACRAR_UPDATE_REPO=sahip/ad ./build.sh
+  [[ "$MACRAR_UPDATE_REPO" =~ '^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$' ]] || { echo "✘ MACRAR_UPDATE_REPO 'sahip/ad' biçiminde olmalı"; exit 1; }
+  $PB -c "Add :MacRARUpdateRepo string $MACRAR_UPDATE_REPO" "$APP/Contents/Info.plist"
+  echo "▸ Güncelleme deposu: $MACRAR_UPDATE_REPO"
 fi
 # Yerelleştirme klasörleri: InfoPlist.strings (tür adları) her iki sürümde, ServicesMenu.strings yalnızca App Store'da
 for lang in en tr; do

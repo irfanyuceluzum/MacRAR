@@ -141,6 +141,8 @@ enum L10n {
         "Diğer arşivler: TAR, TGZ, BZ2, XZ, ZST, ZIPX, CAB, LZH, ARJ, CPIO…": "Other archives: TAR, TGZ, BZ2, XZ, ZST, ZIPX, CAB, LZH, ARJ, CPIO…", "Dosyalar:": "Files:",
         // Güncelleme
         "Güncellemeleri Denetle…": "Check for Updates…", "Güncelleme denetlenemedi": "Could not check for updates",
+        "Yayımlanmış sürüm yok": "No published release",
+        "%@ deposunda henüz yayımlanmış bir sürüm bulunmuyor.": "The %@ repository has no published release yet.",
         "GitHub'a ulaşılamadı. İnternet bağlantınızı kontrol edin.": "GitHub could not be reached. Check your internet connection.",
         "Güncel sürümü kullanıyorsunuz": "You are up to date", "MacRAR %@ en son sürüm.": "MacRAR %@ is the latest version.",
         "MacRAR %@ sürümü çıktı": "MacRAR %@ is available",

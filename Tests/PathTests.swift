@@ -172,5 +172,21 @@ func runPathTests() {
         expect(UpdateChecker.isNewer("0.1", than: "0"))
         expect(!UpdateChecker.isNewer("", than: "1.0"))
     }
+
+    test("UpdateChecker.isValidRepo / varsayılan depo") {
+        expect(UpdateChecker.isValidRepo("mstcvk/MacRAR"))
+        expect(UpdateChecker.isValidRepo("irfanyuceluzum/MacRAR"))
+        expect(UpdateChecker.isValidRepo("a-b/repo.name_1"))
+        expect(!UpdateChecker.isValidRepo("MacRAR"), "sahip yok")
+        expect(!UpdateChecker.isValidRepo("a/b/c"), "fazla bileşen")
+        expect(!UpdateChecker.isValidRepo("../x"))
+        expect(!UpdateChecker.isValidRepo("a/.."))
+        expect(!UpdateChecker.isValidRepo("evil.com/x"), "sahipte nokta olamaz")
+        expect(!UpdateChecker.isValidRepo("a/b?x=1"))
+        expect(!UpdateChecker.isValidRepo("a /b"))
+        // Test ikilisinin Info.plist'i yok: varsayılan depo kullanılır
+        expectEqual(UpdateChecker.repo, UpdateChecker.defaultRepo)
+        expectEqual(UpdateChecker.releasesPage.absoluteString, "https://github.com/mstcvk/MacRAR/releases/latest")
+    }
     #endif
 }

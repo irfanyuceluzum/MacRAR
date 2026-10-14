@@ -90,6 +90,8 @@ Birim testlerini derleyip çalıştırmak için `./test.sh` (Xcode projesi ya da
 
 Yalnızca derlemek için `./build.sh` (çıktı: `build/MacRAR.app`). Kurulum adımı çalışan bir MacRAR'ı asla kapatmaz; devam eden bir çıkartma varsa uygulamanın kapanmasını bekler.
 
+Kendi sürümlerini yayımlayan bir fork, güncellemelerin kendi deposundan denetlenmesi için `MACRAR_UPDATE_REPO=sahip/ad ./build.sh install` ile derleyebilir (varsayılan: `mstcvk/MacRAR`).
+
 `7zz` ikilisi bu depoda **bulunmaz**; `fetch-tools.sh` onu resmi kaynağından indirir, böylece lisansı sahibinde kalır. RARLAB'ın `rar` aracı hiçbir zaman paketlenmez; kullanıcının indirdiği kopya `~/Library/Application Support/MacRAR/rar` altına kurulur.
 
 Hangi dosya türlerinin MacRAR ile açılacağını seçmek: uygulama menüsünden **"Dosya İlişkilendirmeleri…"** (ilk açılışta bir kez kendiliğinden sorulur).
