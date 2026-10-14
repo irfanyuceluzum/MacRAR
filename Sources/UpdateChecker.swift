@@ -3,8 +3,20 @@ import AppKit
 
 /// GitHub Releases üzerinden yeni sürüm denetimi (anonim API, kimlik bilgisi yok).
 enum UpdateChecker {
-    static let repo = "mstcvk/MacRAR"
-    static let releasesPage = URL(string: "https://github.com/mstcvk/MacRAR/releases/latest")!
+    static let defaultRepo = "mstcvk/MacRAR"
+    /// Sürümlerin arandığı GitHub deposu ("sahip/ad"). Bir fork kendi sürümlerini dağıtacaksa derlerken
+    /// MACRAR_UPDATE_REPO=sahip/ad ./build.sh ile Info.plist'e (MacRARUpdateRepo) yazılır.
+    static let repo: String = {
+        if let r = Bundle.main.object(forInfoDictionaryKey: "MacRARUpdateRepo") as? String, isValidRepo(r) { return r }
+        return defaultRepo
+    }()
+    static var releasesPage: URL { URL(string: "https://github.com/\(repo)/releases/latest")! }
+
+    /// Yalnız "sahip/ad" biçimi: URL'ye eklenen değerden başka bir adres çıkmasın
+    static func isValidRepo(_ s: String) -> Bool {
+        s.range(of: #"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$"#, options: .regularExpression) != nil
+            && !s.hasSuffix("/.") && !s.hasSuffix("/..")
+    }
     private static let lastCheckKey = "UpdateLastCheck"
     private static let skipKey = "UpdateSkippedVersion"
     private static let interval: TimeInterval = 24 * 3600
@@ -30,6 +42,12 @@ enum UpdateChecker {
         req.timeoutInterval = 15
         URLSession.shared.dataTask(with: req) { data, response, error in
             DispatchQueue.main.async {
+                // 404: depoda henüz yayımlanmış sürüm yok (ör. yeni bir fork); bağlantı hatası değil
+                if error == nil, (response as? HTTPURLResponse)?.statusCode == 404 {
+                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastCheckKey)
+                    if manual { Dialogs.info(L("Yayımlanmış sürüm yok"), LF("%@ deposunda henüz yayımlanmış bir sürüm bulunmuyor.", repo)) }
+                    return
+                }
                 guard error == nil, let data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let tag = json["tag_name"] as? String else {
