@@ -106,6 +106,8 @@ xcrun notarytool store-credentials MacRAR --apple-id siz@ornek.com --team-id EKI
 ./release.sh
 ```
 
+`./release.sh publish` DMG ve ZIP'i GitHub Releases'a yükler. Bir fork kendi deposuna `RELEASE_REPO=sahip/ad ./release.sh publish` ile yayımlayabilir (derlenen uygulama güncellemeleri de o depodan denetler); Developer ID sertifikası yoksa `ADHOC=1` ile ad-hoc imzalı, Apple onaysız bir paket üretilir ve ilk açılışta Gatekeeper uyarısı çıkar.
+
 ## Komut satırı modları
 
 Hızlı eylemler uygulamayı şu şekilde çağırır:

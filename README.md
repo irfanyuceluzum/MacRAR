@@ -153,6 +153,8 @@ xcrun notarytool store-credentials MacRAR --apple-id you@example.com --team-id T
 ./release.sh
 ```
 
+`./release.sh publish` uploads the DMG and ZIP to GitHub Releases. A fork can publish to its own repository with `RELEASE_REPO=owner/name ./release.sh publish` (the built app then checks that repository for updates); without a Developer ID certificate, `ADHOC=1` builds an ad-hoc signed, non-notarized package that shows a Gatekeeper warning on first launch.
+
 ## Command-line modes
 
 The Quick Actions launch the app like this:
