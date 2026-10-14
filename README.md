@@ -130,6 +130,8 @@ cd MacRAR
 ./build.sh install    # compiles, installs /Applications/MacRAR.app, registers Finder Quick Actions
 ```
 
+`./test.sh` compiles and runs the unit tests (no Xcode project or third-party dependencies needed).
+
 `./build.sh` alone only builds `build/MacRAR.app`. The install step never kills a running MacRAR; if an extraction is in progress it waits for the app to quit.
 
 The `7zz` binary is **not** part of this repository. `fetch-tools.sh` downloads it from its official source so that its licence stays with its author. RARLAB's `rar` is never bundled; the app installs a copy the user downloads into `~/Library/Application Support/MacRAR/rar`.

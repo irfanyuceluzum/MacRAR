@@ -85,6 +85,8 @@ cd MacRAR
 ./build.sh install    # derler, /Applications/MacRAR.app olarak kurar, Finder hızlı eylemlerini yükler
 ```
 
+Birim testlerini derleyip çalıştırmak için `./test.sh` (Xcode projesi ya da üçüncü parti bağımlılık gerekmez).
+
 Yalnızca derlemek için `./build.sh` (çıktı: `build/MacRAR.app`). Kurulum adımı çalışan bir MacRAR'ı asla kapatmaz; devam eden bir çıkartma varsa uygulamanın kapanmasını bekler.
 
 `7zz` ikilisi bu depoda **bulunmaz**; `fetch-tools.sh` onu resmi kaynağından indirir, böylece lisansı sahibinde kalır. RARLAB'ın `rar` aracı hiçbir zaman paketlenmez; kullanıcının indirdiği kopya `~/Library/Application Support/MacRAR/rar` altına kurulur.

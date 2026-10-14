@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Araçları indir (7zz)
+        run: ./fetch-tools.sh
+      - name: Derle
+        run: ./build.sh
+      - name: Test
+        run: ./test.sh
